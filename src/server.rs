@@ -129,15 +129,15 @@ async fn run_channel(
 
     loop {
         tokio::select! {
-            Some((_, message)) = internal_buf_recv.recv(), if clients.len() > 0 => {
-                for (ref address, ref client_channel) in clients.iter() {
+            Some((_, message)) = internal_buf_recv.recv(), if !clients.is_empty() => {
+                for (ref address, client_channel) in clients.iter() {
                     let send_result =
                         client_channel
                             .send(
                                 Server2ClientMessage::SendToClient { message: message.clone() }
                             )
                             .await;
-                    if let Err(_) = send_result {
+                    if send_result.is_err() {
                         warn!("Client {address} seems to be disconnected", address=address.to_string())
                     }
                 }
@@ -172,11 +172,11 @@ async fn run_topic(name: String, mut server2topic_channel: UnboundedReceiver<Ser
 
     loop {
         tokio::select! {
-            Some((address, message)) = internal_buf_recv.recv(), if channels.len() > 0 => {
+            Some((address, message)) = internal_buf_recv.recv(), if !channels.is_empty() => {
                 for (_, inlet) in channels.iter() {
                     inlet
                         .send(Topic2ChannelMessage::Publish {
-                            address: address,
+                            address,
                             message: message.clone(),
                         })
                         .unwrap()
@@ -188,7 +188,7 @@ async fn run_topic(name: String, mut server2topic_channel: UnboundedReceiver<Ser
                     Server2TopicMessage::Disconnect {address} => {
                         for (_, inlet) in channels.iter() {
                             inlet
-                                .send(Topic2ChannelMessage::Disconnect { address: address })
+                                .send(Topic2ChannelMessage::Disconnect { address })
                                 .unwrap()
                         }
                     }
@@ -205,7 +205,7 @@ async fn run_topic(name: String, mut server2topic_channel: UnboundedReceiver<Ser
                         });
                         channel_inlet
                             .send(Topic2ChannelMessage::Subscribe {
-                                address: address,
+                                address,
                                 send_back,
                             })
                             .unwrap();
@@ -268,7 +268,7 @@ async fn run_server(mut to_server_receiver: tokio::sync::mpsc::Receiver<Client2S
                 info!("IDENTIFY command is yet to be implemented")
             }
             Client2ServerMessage::Disconnect { address } => {
-                for (_, ref channel) in topics.iter() {
+                for (_, channel) in topics.iter() {
                     channel
                         .send(Server2TopicMessage::Disconnect { address })
                         .unwrap()

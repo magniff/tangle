@@ -88,7 +88,7 @@ where
     P: AsRef<[u8]>,
 {
     writer
-        .write_all(&mut {
+        .write_all(&{
             let payload = payload.as_ref();
             let mut buffer_to_push = BytesMut::with_capacity(
                 FRAME_SIZE_HEADER_SIZE + FRAME_TYPE_HEADER_SIZE + payload.len(),
@@ -435,7 +435,7 @@ where
         address = client.address.to_string()
     );
 
-    if let Some(command) = parts.get(0) {
+    if let Some(command) = parts.first() {
         return match *command {
             NOP => Ok(vec![Command::Nop]),
             CLS => exec_cls_command(client, parts).await,

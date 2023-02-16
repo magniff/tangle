@@ -1,6 +1,4 @@
-use anyhow;
 use clap::Parser;
-use tokio;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
