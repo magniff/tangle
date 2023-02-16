@@ -1,5 +1,6 @@
 #!/bin/bash
 
+export DOCKER_BUILDKIT=1
 CWD="$(dirname $0)"
 
 docker build -f DockerfileTangle -t tangled . && \
