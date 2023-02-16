@@ -2,6 +2,8 @@ version: "3.7"
 services:
   tangled:
     image: tangled
+    ports:
+      - 6000:6000
   tester:
     image: tester
     command: poetry run pytest tests/

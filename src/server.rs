@@ -11,7 +11,7 @@ use tokio::net::TcpListener;
 
 use crate::client::Client;
 use crate::message::Message;
-use crate::protocol::{socket_mainloop, write_error_frame, E_BAD_PROTOCOL};
+use crate::protocol::{run_socket_mainloop, write_error_frame, E_BAD_PROTOCOL};
 
 #[derive(Debug)]
 pub enum Server2ClientMessage {
@@ -78,7 +78,7 @@ async fn run_network_listener(
             continue;
         }
 
-        tokio::spawn(socket_mainloop(
+        tokio::spawn(run_socket_mainloop(
             Client::from_reader_writer(address, reader, writer),
             to_server_sender.clone(),
         ));
@@ -138,7 +138,7 @@ async fn run_channel(
                             )
                             .await;
                     if let Err(_) = send_result {
-                        warn!("Client {address} seems to be disconnecred", address=address.to_string())
+                        warn!("Client {address} seems to be disconnected", address=address.to_string())
                     }
                 }
             }
@@ -225,7 +225,9 @@ async fn run_server(mut to_server_receiver: tokio::sync::mpsc::Receiver<Client2S
 
     while let Some(to_server_message) = to_server_receiver.recv().await {
         match to_server_message {
-            Client2ServerMessage::Fin { .. } => {}
+            Client2ServerMessage::Fin { .. } => {
+                info!("FIN command is yet to be implemented")
+            }
             Client2ServerMessage::Publish {
                 address,
                 topic_name,

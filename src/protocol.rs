@@ -560,7 +560,7 @@ where
     }
 }
 
-pub async fn socket_mainloop<R, W>(
+pub async fn run_socket_mainloop<R, W>(
     mut client: crate::client::Client<R, W>,
     to_server_sender: tokio::sync::mpsc::Sender<crate::server::Client2ServerMessage>,
 ) where
