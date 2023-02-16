@@ -1,0 +1,9 @@
+version: "3.7"
+services:
+  tangled:
+    image: tangled
+  tester:
+    image: tester
+    command: poetry run pytest tests/
+    depends_on:
+      - tangled
