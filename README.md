@@ -1,4 +1,4 @@
-# Tangle
+# Tangle 🧶
 
 Toyish implementation of the NSQ message queue in Rust.
 
