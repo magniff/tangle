@@ -567,7 +567,7 @@ pub async fn run_socket_mainloop<R, W>(
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin + Send + Sync + 'static,
 {
-    let mut flush_ticker = tokio::time::interval(std::time::Duration::from_millis(250));
+    let mut flush_ticker = tokio::time::interval(std::time::Duration::from_millis(25));
 
     // let mut from_server_receiver = pending::<Server2ClientMessage>();
     let (from_server_sender, mut from_server_receiver) =

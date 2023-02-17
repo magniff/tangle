@@ -15,6 +15,7 @@ mypy = "^0.991"
 pytest = "^7.2.0"
 pytest-asyncio = "^0.20.3"
 python = "^3.10"
+Faker = "^17.0.0"
 
 [build-system]
 build-backend = "poetry.core.masonry.api"
