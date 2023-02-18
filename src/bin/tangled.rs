@@ -1,7 +1,6 @@
 use clap::Parser;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let arguments = tangle::settings::TangleArguments::parse();
 
     simplelog::TermLogger::init(
@@ -11,9 +10,18 @@ async fn main() -> anyhow::Result<()> {
         simplelog::ColorChoice::Auto,
     )?;
 
-    tangle::server::run(
-        tokio::net::TcpListener::bind(arguments.server_address).await?,
-        tokio::signal::ctrl_c(),
-    )
-    .await
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .thread_name("tangled-main")
+        .build()
+        .unwrap();
+
+    runtime.block_on(async move {
+        tangle::server::run(
+            tokio::net::TcpListener::bind(arguments.server_address).await?,
+            tokio::signal::ctrl_c(),
+        )
+        .await
+    })
 }

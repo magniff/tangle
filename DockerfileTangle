@@ -8,14 +8,14 @@ RUN cargo init --name tangle
 COPY Cargo.toml Cargo.toml
 COPY Cargo.lock Cargo.lock
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build
+RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build --release
 
 COPY src src
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry <<EOF
   set -e
   touch /usr/src/app/src/bin/tangled.rs
-  cargo build
+  cargo build --release
 EOF
 
-ENTRYPOINT [ "/usr/src/app/target/debug/tangled" ]
+ENTRYPOINT [ "/usr/src/app/target/release/tangled" ]

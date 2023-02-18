@@ -525,37 +525,34 @@ where
 {
     let address = client.address.to_string();
     match command {
-        WriterCommand::RespondOk {response} => {
-            write_response_frame(&mut client.writer, response)
-                .await
-                .map(|_| AfterCommand::Proceed)
-                .unwrap_or_else(
-                    |_|
+        WriterCommand::RespondOk { response } => {
+            match write_response_frame(&mut client.writer, response).await {
+                Ok(()) => AfterCommand::Proceed,
+                Err(e) =>
                     AfterCommand::Disconnect {
                         message_to_log:
                             format!(
-                                "{address}: error occurred while pushing response bytes to the client, disconnecting",
+                                "{address}: error occurred while pushing response bytes to the client, reason: {e}",
                             )
                     }
-                )
+
+            }
         }
-        WriterCommand::RespondErr {error} => {
-            write_error_frame(&mut client.writer, error)
-                .await
-                .map(
-                    |_|
+        WriterCommand::RespondErr { error } => {
+            match write_error_frame(&mut client.writer, error).await {
+                Ok(()) =>
                     AfterCommand::Disconnect {
                         message_to_log:
                             format!("{address}: error occurred in protocol logic, disconnecting...")
-                    }
-                )
-                .unwrap_or_else(
-                    |_|
+                    },
+                Err(e) =>
                     AfterCommand::Disconnect {
                         message_to_log:
-                            format!("{address}: error occurred while pushing response bytes to the client, disconnecting")
+                            format!(
+                                "{address}: error occurred while pushing response bytes to the client, reason: {e}"
+                            )
                     }
-                )
+            }
         }
     }
 }
@@ -567,40 +564,29 @@ pub async fn run_socket_mainloop<R, W>(
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin + Send + Sync + 'static,
 {
-    let mut flush_ticker = tokio::time::interval(std::time::Duration::from_millis(25));
-
-    // let mut from_server_receiver = pending::<Server2ClientMessage>();
     let (from_server_sender, mut from_server_receiver) =
         tokio::sync::mpsc::channel::<Server2ClientMessage>(128);
-
     client.send_back_channel = Some(from_server_sender);
+
+    let address = client.address.to_string();
     'mainloop: loop {
         tokio::select! {
-            _ = flush_ticker.tick() => {
-                debug!("{address}: ticker triggered", address=client.address.to_string());
-                if client.writer.flush().await.is_err() {
-                    warn!(
-                        "{address}: abnormally disconnected", address = client.address.to_string()
-                    );
-                    break 'mainloop;
-                };
-            }
             Some(message_from_server) = from_server_receiver.recv() => {
-                info!("{address}: got a new internal message", address=client.address.to_string());
+                info!("{address}: got a new internal message");
                 match message_from_server {
                     Server2ClientMessage::SendToClient {message} => {
-                        info!("{address}: got a new message for a the client", address=client.address.to_string());
+                        info!("{address}: got a new message for a the client");
                         if let Err(reason) = write_message_frame(&mut client.writer, message.as_bytes()).await {
                             error!(
-                                "{address}: looks like the client got disconnected before the message was pushed, reason was: {reason}",
-                                address=client.address.to_string());
+                                "{address}: looks like the client got disconnected before the message was pushed, reason was: {reason}"
+                            );
                             break 'mainloop;
                         }
                     }
                 }
             }
-            Ok(client_commands) = parse_single_command_and_exec(&mut client) => {
-                for command in client_commands {
+            Ok(messages_from_client) = parse_single_command_and_exec(&mut client) => {
+                for command in messages_from_client {
                     let whats_next = match command {
                         Command::Nop => AfterCommand::Proceed,
                         Command::ServerCommand(serve_command) =>
@@ -609,16 +595,20 @@ pub async fn run_socket_mainloop<R, W>(
                             handle_writer_command(writer_command, &mut client).await,
                     };
                     if let AfterCommand::Disconnect {message_to_log} = whats_next {
-                        warn!("{address}: {message_to_log}", address=client.address.to_string());
+                        warn!("{address}: {message_to_log}");
                         break 'mainloop
                     }
                 };
             }
             else => {
-                debug!("{address}: both input and output channels are closed", address=client.address.to_string());
+                debug!("{address}: both input and output channels are closed");
                 break 'mainloop
             }
-        }
+        };
+        if client.writer.flush().await.is_err() {
+            warn!("{address}: abnormally disconnected");
+            break 'mainloop;
+        };
     }
     // Additional cleanup on the server side
     if to_server_sender
@@ -628,16 +618,8 @@ pub async fn run_socket_mainloop<R, W>(
         .await
         .is_err()
     {
-        // At this point both the server and the client are dead, which is kinda sad.
-        error!(
-            "{address}: The server crashed while client was trying to disconnect",
-            address = client.address.to_string()
-        );
+        error!("{address}: The server crashed while client was trying to disconnect");
     };
-    info!(
-        "{address}: Exiting the IO loop, disconnecting...",
-        address = client.address.to_string()
-    );
 }
 
 #[cfg(test)]

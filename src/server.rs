@@ -5,6 +5,8 @@ use tokio::sync::mpsc::{unbounded_channel, Sender, UnboundedReceiver, UnboundedS
 use anyhow::Result;
 use futures::future::try_join_all;
 use log::{error, info, warn};
+use rand::seq::IteratorRandom;
+use rand::{self, SeedableRng};
 use tokio;
 use tokio::io::{AsyncReadExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
@@ -18,6 +20,7 @@ pub enum Server2ClientMessage {
     SendToClient { message: crate::message::Message },
 }
 
+// Client2serverMessage is suppose to be a message origin
 #[derive(Debug)]
 pub enum Client2ServerMessage {
     Disconnect {
@@ -48,11 +51,9 @@ pub enum Client2ServerMessage {
     },
 }
 
-pub enum FromServerMessage {}
-
 async fn run_network_listener(
     listener: TcpListener,
-    to_server_sender: tokio::sync::mpsc::Sender<Client2ServerMessage>,
+    client2server_channel: tokio::sync::mpsc::Sender<Client2ServerMessage>,
 ) {
     info!("Spinning up a new network listener task...");
     while let Ok((tcp_stream, address)) = listener.accept().await {
@@ -80,7 +81,7 @@ async fn run_network_listener(
 
         tokio::spawn(run_socket_mainloop(
             Client::from_reader_writer(address, reader, writer),
-            to_server_sender.clone(),
+            client2server_channel.clone(),
         ));
 
         info!("Client {address} is now connected");
@@ -101,6 +102,10 @@ enum Server2TopicMessage {
         address: std::net::SocketAddr,
         message: crate::message::Message,
     },
+    Rdy {
+        address: std::net::SocketAddr,
+        count: u32,
+    },
 }
 
 #[derive(Debug)]
@@ -116,6 +121,27 @@ enum Topic2ChannelMessage {
         address: std::net::SocketAddr,
         send_back: Sender<Server2ClientMessage>,
     },
+    Rdy {
+        address: std::net::SocketAddr,
+        count: u32,
+    },
+}
+
+#[derive(Debug)]
+struct ClientDescriptor {
+    sender: Sender<Server2ClientMessage>,
+    capacity: u32,
+}
+
+fn check_clients_capacity(
+    descriptor_map: &HashMap<std::net::SocketAddr, ClientDescriptor>,
+) -> bool {
+    for (_, descriptor) in descriptor_map.iter() {
+        if descriptor.capacity > 0 {
+            return true;
+        }
+    }
+    false
 }
 
 async fn run_channel(
@@ -123,27 +149,41 @@ async fn run_channel(
     mut topic2channel_channel: UnboundedReceiver<Topic2ChannelMessage>,
 ) {
     info!("Spinning up a new channel {name}");
-    let mut clients: HashMap<std::net::SocketAddr, Sender<Server2ClientMessage>> = HashMap::new();
-    let (internal_buf_send, mut internal_buf_recv) =
+    let mut rng = rand::rngs::StdRng::from_entropy();
+    let mut clients: HashMap<std::net::SocketAddr, ClientDescriptor> = HashMap::new();
+    // let mut unacked_messages: HashMap<[u8; 16], crate::message::Message> = HashMap::new();
+
+    let (internal_buf_send, mut internal_buffer) =
         tokio::sync::mpsc::unbounded_channel::<(std::net::SocketAddr, Message)>();
 
     loop {
         tokio::select! {
-            Some((_, message)) = internal_buf_recv.recv(), if !clients.is_empty() => {
-                for (ref address, client_channel) in clients.iter() {
-                    let send_result =
-                        client_channel
-                            .send(
-                                Server2ClientMessage::SendToClient { message: message.clone() }
-                            )
-                            .await;
-                    if send_result.is_err() {
-                        warn!("Client {address} seems to be disconnected", address=address.to_string())
-                    }
-                }
+            Some((_, message)) = internal_buffer.recv(), if check_clients_capacity(&clients) => {
+                // According to the precondition above, there must be at least one ready client
+                let (address, descriptor)  =
+                    clients
+                        .iter_mut()
+                        .filter(|(_, desciptor)| {desciptor.capacity > 0})
+                        .choose(&mut rng)
+                        .unwrap();
+                let send_result =
+                    descriptor
+                        .sender
+                        .send(
+                            Server2ClientMessage::SendToClient { message: message.clone() }
+                        )
+                        .await;
+
+                // You, just like myself, would probably expect descriptor.capacity to decrement, right?
+                // https://github.com/nsqio/nsq/issues/1440
+                // descriptor.capacity -= 1;
+
+                if send_result.is_err() {
+                    warn!("Client {address} seems to be disconnected", address=address.to_string())
+                };
             }
-            Some(message) = topic2channel_channel.recv() => {
-                match message {
+            Some(message_from_topic) = topic2channel_channel.recv() => {
+                match message_from_topic {
                     Topic2ChannelMessage::Disconnect {address} => {
                         clients.remove(&address);
                     }
@@ -156,7 +196,12 @@ async fn run_channel(
                             .unwrap();
                     }
                     Topic2ChannelMessage::Subscribe { send_back, address, .. } => {
-                        clients.insert(address, send_back);
+                        clients.entry(address).or_insert(ClientDescriptor {sender: send_back, capacity: 0});
+                    }
+                    Topic2ChannelMessage::Rdy {address, count} => {
+                        if let Some(client_descriptor) = clients.get_mut(&address) {
+                            client_descriptor.capacity = count;
+                        }
                     }
                 }
             }
@@ -167,12 +212,12 @@ async fn run_channel(
 async fn run_topic(name: String, mut server2topic_channel: UnboundedReceiver<Server2TopicMessage>) {
     info!("Spinning up a new topic {name}");
     let mut channels: HashMap<String, UnboundedSender<Topic2ChannelMessage>> = HashMap::new();
-    let (internal_buf_send, mut internal_buf_recv) =
+    let (internal_buf_send, mut internal_buffer) =
         tokio::sync::mpsc::unbounded_channel::<(std::net::SocketAddr, Message)>();
 
     loop {
         tokio::select! {
-            Some((address, message)) = internal_buf_recv.recv(), if !channels.is_empty() => {
+            Some((address, message)) = internal_buffer.recv(), if !channels.is_empty() => {
                 for (_, inlet) in channels.iter() {
                     inlet
                         .send(Topic2ChannelMessage::Publish {
@@ -184,11 +229,17 @@ async fn run_topic(name: String, mut server2topic_channel: UnboundedReceiver<Ser
             }
             Some(message) = server2topic_channel.recv() => {
                 match message {
-                    // Forward a clients disconnection event to the actual queues
                     Server2TopicMessage::Disconnect {address} => {
                         for (_, inlet) in channels.iter() {
                             inlet
                                 .send(Topic2ChannelMessage::Disconnect { address })
+                                .unwrap()
+                        }
+                    }
+                    Server2TopicMessage::Rdy {address, count} => {
+                        for (_, inlet) in channels.iter() {
+                            inlet
+                                .send(Topic2ChannelMessage::Rdy { address, count })
                                 .unwrap()
                         }
                     }
@@ -220,10 +271,10 @@ async fn run_topic(name: String, mut server2topic_channel: UnboundedReceiver<Ser
     }
 }
 
-async fn run_server(mut to_server_receiver: tokio::sync::mpsc::Receiver<Client2ServerMessage>) {
+async fn run_server(mut client2server_channel: tokio::sync::mpsc::Receiver<Client2ServerMessage>) {
     let mut topics: HashMap<String, UnboundedSender<Server2TopicMessage>> = HashMap::new();
 
-    while let Some(to_server_message) = to_server_receiver.recv().await {
+    while let Some(to_server_message) = client2server_channel.recv().await {
         match to_server_message {
             Client2ServerMessage::Fin { .. } => {
                 info!("FIN command is yet to be implemented")
@@ -261,15 +312,21 @@ async fn run_server(mut to_server_receiver: tokio::sync::mpsc::Receiver<Client2S
                     })
                     .unwrap();
             }
-            Client2ServerMessage::NotifyReady { .. } => {
-                info!("RDY command is yet to be implemented")
+            Client2ServerMessage::NotifyReady { address, count } => {
+                // NOTE!: this implementation is not correct
+                // ready should be state is shared among the queues, not copied
+                for (_, topic_sender) in topics.iter() {
+                    topic_sender
+                        .send(Server2TopicMessage::Rdy { address, count })
+                        .unwrap()
+                }
             }
             Client2ServerMessage::Identify { .. } => {
                 info!("IDENTIFY command is yet to be implemented")
             }
             Client2ServerMessage::Disconnect { address } => {
-                for (_, channel) in topics.iter() {
-                    channel
+                for (_, topic_sender) in topics.iter() {
+                    topic_sender
                         .send(Server2TopicMessage::Disconnect { address })
                         .unwrap()
                 }
