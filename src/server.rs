@@ -106,6 +106,10 @@ enum Server2TopicMessage {
         address: std::net::SocketAddr,
         count: u32,
     },
+    Fin {
+        address: std::net::SocketAddr,
+        message_id: [u8; 16],
+    },
 }
 
 #[derive(Debug)]
@@ -124,6 +128,10 @@ enum Topic2ChannelMessage {
     Rdy {
         address: std::net::SocketAddr,
         count: u32,
+    },
+    Fin {
+        address: std::net::SocketAddr,
+        message_id: [u8; 16],
     },
 }
 
@@ -151,7 +159,7 @@ async fn run_channel(
     info!("Spinning up a new channel {name}");
     let mut rng = rand::rngs::StdRng::from_entropy();
     let mut clients: HashMap<std::net::SocketAddr, ClientDescriptor> = HashMap::new();
-    // let mut unacked_messages: HashMap<[u8; 16], crate::message::Message> = HashMap::new();
+    let mut unacked_messages: HashMap<[u8; 16], crate::message::Message> = HashMap::new();
 
     let (internal_buf_send, mut internal_buffer) =
         tokio::sync::mpsc::unbounded_channel::<(std::net::SocketAddr, Message)>();
@@ -178,6 +186,7 @@ async fn run_channel(
                 // https://github.com/nsqio/nsq/issues/1440
                 // descriptor.capacity -= 1;
 
+                unacked_messages.insert(message.id, message);
                 if send_result.is_err() {
                     warn!("Client {address} seems to be disconnected", address=address.to_string())
                 };
@@ -202,6 +211,10 @@ async fn run_channel(
                         if let Some(client_descriptor) = clients.get_mut(&address) {
                             client_descriptor.capacity = count;
                         }
+                    }
+                    #[allow(unused_variables)]
+                    Topic2ChannelMessage::Fin {message_id, address } => {
+                        unacked_messages.remove(&message_id);
                     }
                 }
             }
@@ -261,6 +274,13 @@ async fn run_topic(name: String, mut server2topic_channel: UnboundedReceiver<Ser
                             })
                             .unwrap();
                     }
+                    Server2TopicMessage::Fin {address, message_id} => {
+                        for (_, inlet) in channels.iter() {
+                            inlet
+                                .send(Topic2ChannelMessage::Fin { address, message_id })
+                                .unwrap()
+                        }
+                    }
                     Server2TopicMessage::Publish { address, message } => {
                         internal_buf_send.send((address, message)).unwrap();
                     }
@@ -276,8 +296,18 @@ async fn run_server(mut client2server_channel: tokio::sync::mpsc::Receiver<Clien
 
     while let Some(to_server_message) = client2server_channel.recv().await {
         match to_server_message {
-            Client2ServerMessage::Fin { .. } => {
-                info!("FIN command is yet to be implemented")
+            Client2ServerMessage::Fin {
+                address,
+                message_id,
+            } => {
+                for (_, topic_sender) in topics.iter() {
+                    topic_sender
+                        .send(Server2TopicMessage::Fin {
+                            address,
+                            message_id,
+                        })
+                        .unwrap()
+                }
             }
             Client2ServerMessage::Publish {
                 address,

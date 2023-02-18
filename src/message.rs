@@ -9,10 +9,10 @@ use rand::{distributions::Alphanumeric, Rng};
 
 #[derive(Default, Eq, Debug, Clone)]
 pub struct Message {
-    id: [u8; 16],
-    timestamp: u64,
-    attempts: u16,
-    body: Vec<u8>,
+    pub id: [u8; 16],
+    pub timestamp: u64,
+    pub attempts: u16,
+    pub body: Vec<u8>,
 }
 
 impl Deref for Message {
