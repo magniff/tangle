@@ -49,6 +49,10 @@ pub enum Client2ServerMessage {
         address: std::net::SocketAddr,
         message_id: [u8; 16],
     },
+    Req {
+        address: std::net::SocketAddr,
+        message_id: [u8; 16],
+    },
 }
 
 async fn run_network_listener(
@@ -110,6 +114,10 @@ enum Server2TopicMessage {
         address: std::net::SocketAddr,
         message_id: [u8; 16],
     },
+    Req {
+        address: std::net::SocketAddr,
+        message_id: [u8; 16],
+    },
 }
 
 #[derive(Debug)]
@@ -130,6 +138,10 @@ enum Topic2ChannelMessage {
         count: u32,
     },
     Fin {
+        address: std::net::SocketAddr,
+        message_id: [u8; 16],
+    },
+    Req {
         address: std::net::SocketAddr,
         message_id: [u8; 16],
     },
@@ -213,8 +225,15 @@ async fn run_channel(
                         }
                     }
                     #[allow(unused_variables)]
-                    Topic2ChannelMessage::Fin {message_id, address } => {
+                    Topic2ChannelMessage::Fin { address, message_id } => {
                         unacked_messages.remove(&message_id);
+                    }
+                    #[allow(unused_variables)]
+                    Topic2ChannelMessage::Req { address, message_id } => {
+                        if let Some(message) = unacked_messages.get_mut(&message_id) {
+                            message.attempts += 1;
+                            internal_buf_send.send((address, message.clone())).unwrap()
+                        }
                     }
                 }
             }
@@ -281,6 +300,13 @@ async fn run_topic(name: String, mut server2topic_channel: UnboundedReceiver<Ser
                                 .unwrap()
                         }
                     }
+                    Server2TopicMessage::Req {address, message_id} => {
+                        for (_, inlet) in channels.iter() {
+                            inlet
+                                .send(Topic2ChannelMessage::Req { address, message_id })
+                                .unwrap()
+                        }
+                    }
                     Server2TopicMessage::Publish { address, message } => {
                         internal_buf_send.send((address, message)).unwrap();
                     }
@@ -303,6 +329,19 @@ async fn run_server(mut client2server_channel: tokio::sync::mpsc::Receiver<Clien
                 for (_, topic_sender) in topics.iter() {
                     topic_sender
                         .send(Server2TopicMessage::Fin {
+                            address,
+                            message_id,
+                        })
+                        .unwrap()
+                }
+            }
+            Client2ServerMessage::Req {
+                address,
+                message_id,
+            } => {
+                for (_, topic_sender) in topics.iter() {
+                    topic_sender
+                        .send(Server2TopicMessage::Req {
                             address,
                             message_id,
                         })

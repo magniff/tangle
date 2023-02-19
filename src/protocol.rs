@@ -338,27 +338,37 @@ where
     }
 }
 
-// // REQ <message_id> <timeout>\n
-// // <message_id> - message id as 16-byte hex string
-// // <timeout> - a string representation of integer N where N <= configured max timeout
-// //     timeout == 0 - requeue a message immediately
-// //     timeout  > 0 - defer requeue for timeout milliseconds
-// async fn exec_req_command<R, W>(
-//     client: &mut crate::client::Client<R, W>,
-//     parts: &[&str],
-// ) -> Result<Vec<CommandExecResult>>
-// where
-//     R: AsyncBufRead + Unpin,
-//     W: AsyncWrite + Unpin + 'static,
-// {
-//     if parts.len() != 3 {
-//         return Ok(vec![CommandExecResult::RespondProtocolError {
-//             error: format!("{E_INVALID}: REQ command should have exactly two arguments"),
-//         }]);
-//     };
-//     // TODO: implement the rest of the pub function
-//     Ok(vec![CommandExecResult::Nop])
-// }
+// REQ <message_id> <timeout>\n
+// <message_id> - message id as 16-byte hex string
+// <timeout> - a string representation of integer N where N <= configured max timeout
+//     timeout == 0 - requeue a message immediately
+//     timeout  > 0 - defer requeue for timeout milliseconds
+async fn exec_req_command<R, W>(
+    client: &mut crate::client::Client<R, W>,
+    parts: &[&str],
+) -> Result<Vec<Command>>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin + 'static,
+{
+    // For now we'll ommit the requeue timeout
+    let &["REQ", message_id, _] = parts else {
+        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
+            error: format!("{E_INVALID}: REQ command should have exactly two arguments"),
+        })]);
+    };
+    match TryInto::<[u8; 16]>::try_into(message_id.as_bytes()) {
+        Ok(buffer) => Ok(vec![Command::ServerCommand(Client2ServerMessage::Req {
+            address: client.address,
+            message_id: buffer,
+        })]),
+        Err(reason) => Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
+            error: format!(
+                "{E_BAD_MESSAGE}: message id should be exactly 16 bytes long, error: {reason}"
+            ),
+        })]),
+    }
+}
 
 // // TOUCH <message_id>\n
 // // <message_id> - the hex id of the message
@@ -444,8 +454,8 @@ where
             PUB => exec_pub_command(client, parts).await,
             RDY => exec_rdy_command(client, parts).await,
             FIN => exec_fin_command(client, parts).await,
+            REQ => exec_req_command(client, parts).await,
             // _ if *command == MPUB => exec_mpub_command(client, parts).await,
-            // _ if *command == REQ => exec_req_command(client, parts).await,
             // _ if *command == TOUCH => exec_touch_command(client, parts).await,
             // _ if *command == AUTH => exec_auth_command(client, parts).await,
             something_else => {
