@@ -194,11 +194,9 @@ async fn run_channel(
                         )
                         .await;
 
-                // You, just like myself, would probably expect descriptor.capacity to decrement, right?
-                // https://github.com/nsqio/nsq/issues/1440
-                // descriptor.capacity -= 1;
-
+                descriptor.capacity -= 1;
                 unacked_messages.insert(message.id, message);
+
                 if send_result.is_err() {
                     warn!("Client {address} seems to be disconnected", address=address.to_string())
                 };
@@ -224,15 +222,21 @@ async fn run_channel(
                             client_descriptor.capacity = count;
                         }
                     }
-                    #[allow(unused_variables)]
                     Topic2ChannelMessage::Fin { address, message_id } => {
                         unacked_messages.remove(&message_id);
+                        // NOTE: Client could have disconnected at this point, match for safety
+                        if let Some(descriptor) = clients.get_mut(&address) {
+                            descriptor.capacity += 1;
+                        }
                     }
-                    #[allow(unused_variables)]
                     Topic2ChannelMessage::Req { address, message_id } => {
                         if let Some(message) = unacked_messages.get_mut(&message_id) {
                             message.attempts += 1;
-                            internal_buf_send.send((address, message.clone())).unwrap()
+                            internal_buf_send.send((address, message.clone())).unwrap();
+                            // NOTE: Client could have disconnected at this point, match for safety
+                            if let Some(descriptor) = clients.get_mut(&address) {
+                                descriptor.capacity += 1;
+                            }
                         }
                     }
                 }
