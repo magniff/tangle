@@ -223,10 +223,11 @@ async fn run_channel(
                         }
                     }
                     Topic2ChannelMessage::Fin { address, message_id } => {
-                        unacked_messages.remove(&message_id);
-                        // NOTE: Client could have disconnected at this point, match for safety
-                        if let Some(descriptor) = clients.get_mut(&address) {
-                            descriptor.capacity += 1;
+                        if unacked_messages.remove(&message_id).is_some() {
+                            // NOTE: Client could have disconnected at this point, match for safety
+                            if let Some(descriptor) = clients.get_mut(&address) {
+                                descriptor.capacity += 1;
+                            }
                         }
                     }
                     Topic2ChannelMessage::Req { address, message_id } => {
