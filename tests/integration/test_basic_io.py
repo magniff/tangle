@@ -42,8 +42,8 @@ async def test_write_many_messages_to_multiple_topics():
 
 
 async def message_with_timeout(
-        messages: typing.AsyncIterator[NSQMessage],
-        timeout: float = 0.01) -> typing.Optional[NSQMessage]:
+    messages: typing.AsyncIterator[NSQMessage], timeout: float = 0.01
+) -> typing.Optional[NSQMessage]:
     try:
         async with asyncio.timeout(timeout):
             return await anext(messages)
