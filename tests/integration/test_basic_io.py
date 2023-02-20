@@ -1,8 +1,11 @@
+import asyncio
+import typing
 import uuid
 
 import ansq
 import faker
 import pytest
+from ansq.tcp.types import NSQMessage
 
 fake = faker.Faker()
 
@@ -36,6 +39,54 @@ async def test_write_many_messages_to_multiple_topics():
             assert message_actual.attempts == 1
 
         await reader.close()
+
+
+async def message_with_timeout(
+        messages: typing.AsyncIterator[NSQMessage],
+        timeout: float = 0.01) -> typing.Optional[NSQMessage]:
+    try:
+        async with asyncio.timeout(timeout):
+            return await anext(messages)
+    except asyncio.TimeoutError:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_max_in_flight():
+    tangled_address = ["tangled:4150"]
+
+    topic_name = uuid.uuid4().hex
+    data = [fake.binary(length=1024) for _ in range(40)]
+
+    writer = await ansq.create_writer(nsqd_tcp_addresses=tangled_address)
+    for message in data:
+        await writer.pub(topic=topic_name, message=message)
+
+    reader = await ansq.create_reader(
+        nsqd_tcp_addresses=tangled_address,
+        topic=topic_name,
+        channel=uuid.uuid4().hex,
+    )
+
+    messages = reader.messages()
+
+    # The first <max-in-flight: 16> messages should be available without acknoledgment
+    messages_first_batch = [await anext(messages) for _ in range(16)]
+
+    # The next message should not be available until at leas something is FINed or REQed
+    assert await message_with_timeout(reader.messages()) is None
+
+    # By finalizing the first message we unlock a new message to receive
+    await messages_first_batch[0].fin()
+
+    # Now this call should yield a new message insteand of None
+    assert await message_with_timeout(reader.messages()) is not None
+
+    # And the next attempt should fail again
+    assert await message_with_timeout(reader.messages()) is None
+
+    await reader.close()
+    await writer.close()
 
 
 @pytest.mark.asyncio

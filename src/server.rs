@@ -206,7 +206,11 @@ async fn run_channel(
                             .unwrap();
                     }
                     Topic2ChannelMessage::Subscribe { send_back, address, .. } => {
-                        clients.entry(address).or_insert(ClientDescriptor {sender: send_back, capacity: config.max_in_flight});
+                        clients
+                            .entry(address)
+                            .or_insert(
+                                ClientDescriptor {sender: send_back, capacity: config.max_in_flight}
+                            );
                     }
                     Topic2ChannelMessage::Fin { address, message_id } => {
                         if inflight_messages.remove(&message_id).is_some() {
