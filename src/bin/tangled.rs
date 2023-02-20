@@ -1,7 +1,8 @@
 use clap::Parser;
+use std::sync::Arc;
 
 fn main() -> anyhow::Result<()> {
-    let arguments = tangle::settings::TangleArguments::parse();
+    let arguments = Arc::new(tangle::settings::TangleArguments::parse());
 
     simplelog::TermLogger::init(
         arguments.log_level,
@@ -11,17 +12,12 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
+        .worker_threads(arguments.worker_threads as usize)
         .enable_all()
-        .thread_name("tangled-main")
         .build()
         .unwrap();
 
     runtime.block_on(async move {
-        tangle::server::run(
-            tokio::net::TcpListener::bind(arguments.server_address).await?,
-            tokio::signal::ctrl_c(),
-        )
-        .await
+        tangle::server::run_tangled(arguments.clone(), tokio::signal::ctrl_c()).await
     })
 }

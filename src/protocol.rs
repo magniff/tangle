@@ -288,25 +288,20 @@ where
 // RDY <count>\n
 // <count> - a string representation of integer N where 0 < N <= configured_max
 async fn exec_rdy_command<R, W>(
-    client: &mut crate::client::Client<R, W>,
+    _: &mut crate::client::Client<R, W>,
     parts: &[&str],
 ) -> Result<Vec<Command>>
 where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin + 'static,
 {
-    let &["RDY", ready_count] = parts else {
+    let &["RDY", _] = parts else {
         return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
             error: format!("{E_INVALID}: RDY command should have exactly one argument"),
         })]);
     };
 
-    Ok(vec![Command::ServerCommand(
-        Client2ServerMessage::NotifyReady {
-            address: client.address,
-            count: ready_count.parse::<u32>()?,
-        },
-    )])
+    Ok(vec![Command::Nop])
 }
 
 // // FIN <message_id>\n
