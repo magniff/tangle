@@ -8,14 +8,14 @@ use bytes::{BufMut, Bytes, BytesMut};
 use rand::{distributions::Alphanumeric, Rng};
 
 #[derive(Default, Eq, Debug, Clone)]
-pub struct Message {
+pub struct ProtocolMessage {
     pub id: [u8; 16],
     pub timestamp: u64,
     pub attempts: u16,
     pub body: Vec<u8>,
 }
 
-impl Deref for Message {
+impl Deref for ProtocolMessage {
     type Target = Vec<u8>;
 
     fn deref(&self) -> &Self::Target {
@@ -23,25 +23,25 @@ impl Deref for Message {
     }
 }
 
-impl Ord for Message {
+impl Ord for ProtocolMessage {
     fn cmp(&self, other: &Self) -> Ordering {
         self.timestamp.cmp(&other.timestamp)
     }
 }
 
-impl PartialOrd for Message {
+impl PartialOrd for ProtocolMessage {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl PartialEq for Message {
+impl PartialEq for ProtocolMessage {
     fn eq(&self, other: &Self) -> bool {
         self.timestamp == other.timestamp
     }
 }
 
-impl Message {
+impl ProtocolMessage {
     /// # Constructs a new message instance from a slice buffer
     /// ## Example
     /// ```rust

@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWr
 
 use crate::{
     client::IdentifyData,
-    server::{Client2ServerMessage, Server2ClientMessage},
+    server::{Server2ClientMessage, ServerMessage},
 };
 
 pub enum FrameType {
@@ -70,7 +70,7 @@ enum WriterCommand {
 enum Command {
     Nop,
     WriterCommand(WriterCommand),
-    ServerCommand(crate::server::Client2ServerMessage),
+    ServerCommand(crate::server::ServerMessage),
 }
 
 // [x][x][x][x][x][x][x][x][x][x][x][x]...
@@ -146,11 +146,9 @@ where
     let payload_expected_size = client.reader.read_u32().await? as usize;
     let mut identify_payload_buffer = BytesMut::with_capacity(payload_expected_size);
     if client.reader.read_buf(&mut identify_payload_buffer).await? == 0 {
-        return Ok(vec![Command::ServerCommand(
-            Client2ServerMessage::Disconnect {
-                address: client.address,
-            },
-        )]);
+        return Ok(vec![Command::ServerCommand(ServerMessage::Disconnect {
+            address: client.address,
+        })]);
     }
 
     let identify_data: IdentifyData = serde_json::from_slice(identify_payload_buffer.as_ref())?;
@@ -158,7 +156,7 @@ where
     // If feature_negotiation flag is raised, the client would expect to get a json back
     if identify_data.feature_negotiation == Some(true) {
         return Ok(vec![
-            Command::ServerCommand(Client2ServerMessage::Identify {
+            Command::ServerCommand(ServerMessage::Identify {
                 address: client.address,
                 data: identify_data,
             }),
@@ -190,7 +188,7 @@ where
     };
 
     Ok(vec![
-        Command::ServerCommand(Client2ServerMessage::Subscribe {
+        Command::ServerCommand(ServerMessage::Subscribe {
             address: client.address,
             topic_name: topic_name.to_string(),
             channel_name: channel_name.to_string(),
@@ -221,18 +219,16 @@ where
     let mut message_body_buffer = BytesMut::with_capacity(client.reader.read_u32().await? as usize);
     // Read the body or handle the client's sudden death
     if client.reader.read_buf(&mut message_body_buffer).await? == 0 {
-        return Ok(vec![Command::ServerCommand(
-            Client2ServerMessage::Disconnect {
-                address: client.address,
-            },
-        )]);
+        return Ok(vec![Command::ServerCommand(ServerMessage::Disconnect {
+            address: client.address,
+        })]);
     }
 
     Ok(vec![
-        Command::ServerCommand(Client2ServerMessage::Publish {
+        Command::ServerCommand(ServerMessage::Publish {
             address: client.address,
             topic_name: topic_name.to_string(),
-            message: crate::message::Message::from_body(message_body_buffer),
+            message: crate::message::ProtocolMessage::from_body(message_body_buffer),
         }),
         Command::WriterCommand(WriterCommand::RespondOk {
             response: OK.to_string(),
@@ -321,7 +317,7 @@ where
     };
 
     match TryInto::<[u8; 16]>::try_into(message_id.as_bytes()) {
-        Ok(buffer) => Ok(vec![Command::ServerCommand(Client2ServerMessage::Fin {
+        Ok(buffer) => Ok(vec![Command::ServerCommand(ServerMessage::Finalize {
             address: client.address,
             message_id: buffer,
         })]),
@@ -353,7 +349,7 @@ where
         })]);
     };
     match TryInto::<[u8; 16]>::try_into(message_id.as_bytes()) {
-        Ok(buffer) => Ok(vec![Command::ServerCommand(Client2ServerMessage::Req {
+        Ok(buffer) => Ok(vec![Command::ServerCommand(ServerMessage::Requeue {
             address: client.address,
             message_id: buffer,
         })]),
@@ -400,11 +396,9 @@ where
         })]);
     };
 
-    Ok(vec![Command::ServerCommand(
-        Client2ServerMessage::Disconnect {
-            address: client.address,
-        },
-    )])
+    Ok(vec![Command::ServerCommand(ServerMessage::Disconnect {
+        address: client.address,
+    })])
 }
 
 // // AUTH\n
@@ -475,11 +469,9 @@ where
 {
     let mut current_line_buffer = String::with_capacity(LINE_BUFFER_PREALLOCATE_SIZE);
     if client.reader.read_line(&mut current_line_buffer).await? == 0 {
-        return Ok(vec![Command::ServerCommand(
-            Client2ServerMessage::Disconnect {
-                address: client.address,
-            },
-        )]);
+        return Ok(vec![Command::ServerCommand(ServerMessage::Disconnect {
+            address: client.address,
+        })]);
     }
 
     if current_line_buffer.ends_with('\n') {
@@ -502,12 +494,12 @@ enum AfterCommand {
 }
 
 async fn handle_server_command(
-    command: crate::server::Client2ServerMessage,
-    to_server_sender: &tokio::sync::mpsc::Sender<crate::server::Client2ServerMessage>,
+    command: crate::server::ServerMessage,
+    to_server_sender: &tokio::sync::mpsc::Sender<crate::server::ServerMessage>,
 ) -> AfterCommand {
     match command {
         // Disconnect commands are handled somewwhere else
-        Client2ServerMessage::Disconnect { address, .. } => AfterCommand::Disconnect {
+        ServerMessage::Disconnect { address, .. } => AfterCommand::Disconnect {
             message_to_log: format!("{address}: will soon be disconnected"),
         },
         other_command => to_server_sender
@@ -564,7 +556,7 @@ where
 
 pub async fn run_socket_mainloop<R, W>(
     mut client: crate::client::Client<R, W>,
-    to_server_sender: tokio::sync::mpsc::Sender<crate::server::Client2ServerMessage>,
+    to_server_sender: tokio::sync::mpsc::Sender<crate::server::ServerMessage>,
 ) where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin + Send + Sync + 'static,
@@ -617,7 +609,7 @@ pub async fn run_socket_mainloop<R, W>(
     }
     // Additional cleanup on the server side
     if to_server_sender
-        .send(Client2ServerMessage::Disconnect {
+        .send(ServerMessage::Disconnect {
             address: client.address,
         })
         .await

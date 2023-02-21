@@ -14,17 +14,19 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::Receiver;
 
 use crate::client::Client;
-use crate::message::Message;
+use crate::message::ProtocolMessage;
 use crate::protocol::{run_socket_mainloop, write_error_frame, E_BAD_PROTOCOL};
 
 #[derive(Debug)]
 pub enum Server2ClientMessage {
-    SendToClient { message: crate::message::Message },
+    SendToClient {
+        message: crate::message::ProtocolMessage,
+    },
 }
 
 // Client2serverMessage is suppose to be a message origin
 #[derive(Debug)]
-pub enum Client2ServerMessage {
+pub enum ServerMessage {
     Disconnect {
         address: std::net::SocketAddr,
     },
@@ -35,7 +37,7 @@ pub enum Client2ServerMessage {
     Publish {
         address: std::net::SocketAddr,
         topic_name: String,
-        message: crate::message::Message,
+        message: crate::message::ProtocolMessage,
     },
     Subscribe {
         address: std::net::SocketAddr,
@@ -43,11 +45,11 @@ pub enum Client2ServerMessage {
         channel_name: String,
         send_back: Sender<Server2ClientMessage>,
     },
-    Fin {
+    Finalize {
         address: std::net::SocketAddr,
         message_id: [u8; 16],
     },
-    Req {
+    Requeue {
         address: std::net::SocketAddr,
         message_id: [u8; 16],
     },
@@ -55,7 +57,7 @@ pub enum Client2ServerMessage {
 
 async fn run_network_listener(
     listener: TcpListener,
-    client2server_channel: tokio::sync::mpsc::Sender<Client2ServerMessage>,
+    client2server_channel: tokio::sync::mpsc::Sender<ServerMessage>,
 ) {
     info!("Spinning up a new network listener task...");
     while let Ok((tcp_stream, address)) = listener.accept().await {
@@ -91,7 +93,7 @@ async fn run_network_listener(
 }
 
 #[derive(Debug)]
-enum Server2TopicMessage {
+enum TopicMessage {
     Disconnect {
         address: std::net::SocketAddr,
     },
@@ -102,36 +104,36 @@ enum Server2TopicMessage {
     },
     Publish {
         address: std::net::SocketAddr,
-        message: crate::message::Message,
+        message: crate::message::ProtocolMessage,
     },
-    Fin {
+    Finalize {
         address: std::net::SocketAddr,
         message_id: [u8; 16],
     },
-    Req {
+    Requeue {
         address: std::net::SocketAddr,
         message_id: [u8; 16],
     },
 }
 
 #[derive(Debug)]
-enum Topic2ChannelMessage {
+enum ChannelMessage {
     Disconnect {
         address: std::net::SocketAddr,
     },
     Publish {
         address: std::net::SocketAddr,
-        message: crate::message::Message,
+        message: crate::message::ProtocolMessage,
     },
     Subscribe {
         address: std::net::SocketAddr,
         send_back: Sender<Server2ClientMessage>,
     },
-    Fin {
+    Finalize {
         address: std::net::SocketAddr,
         message_id: [u8; 16],
     },
-    Req {
+    Requeue {
         address: std::net::SocketAddr,
         message_id: [u8; 16],
     },
@@ -156,16 +158,16 @@ fn check_clients_capacity(
 
 async fn run_channel(
     name: String,
-    mut topic2channel_channel: UnboundedReceiver<Topic2ChannelMessage>,
+    mut inlet: UnboundedReceiver<ChannelMessage>,
     config: Arc<crate::settings::TangleArguments>,
 ) {
     info!("Spinning up a new channel {name}");
     let mut rng = rand::rngs::StdRng::from_entropy();
     let mut clients: HashMap<std::net::SocketAddr, ClientDescriptor> = HashMap::new();
-    let mut inflight_messages: HashMap<[u8; 16], crate::message::Message> = HashMap::new();
+    let mut inflight_messages: HashMap<[u8; 16], crate::message::ProtocolMessage> = HashMap::new();
 
     let (internal_buf_send, mut internal_buffer) =
-        tokio::sync::mpsc::unbounded_channel::<(std::net::SocketAddr, Message)>();
+        tokio::sync::mpsc::unbounded_channel::<(std::net::SocketAddr, ProtocolMessage)>();
 
     loop {
         tokio::select! {
@@ -192,12 +194,12 @@ async fn run_channel(
                     warn!("Client {address} seems to be disconnected", address=address.to_string())
                 };
             }
-            Some(message_from_topic) = topic2channel_channel.recv() => {
+            Some(message_from_topic) = inlet.recv() => {
                 match message_from_topic {
-                    Topic2ChannelMessage::Disconnect {address} => {
+                    ChannelMessage::Disconnect {address} => {
                         clients.remove(&address);
                     }
-                    Topic2ChannelMessage::Publish {
+                    ChannelMessage::Publish {
                         message: message_to_publish,
                         address,
                     } => {
@@ -205,14 +207,14 @@ async fn run_channel(
                             .send((address, message_to_publish))
                             .unwrap();
                     }
-                    Topic2ChannelMessage::Subscribe { send_back, address, .. } => {
+                    ChannelMessage::Subscribe { send_back, address, .. } => {
                         clients
                             .entry(address)
                             .or_insert(
                                 ClientDescriptor {sender: send_back, capacity: config.max_in_flight}
                             );
                     }
-                    Topic2ChannelMessage::Fin { address, message_id } => {
+                    ChannelMessage::Finalize { address, message_id } => {
                         if inflight_messages.remove(&message_id).is_some() {
                             // NOTE: Client could have disconnected at this point, match for safety
                             if let Some(descriptor) = clients.get_mut(&address) {
@@ -220,7 +222,7 @@ async fn run_channel(
                             }
                         }
                     }
-                    Topic2ChannelMessage::Req { address, message_id } => {
+                    ChannelMessage::Requeue { address, message_id } => {
                         if let Some(message) = inflight_messages.get_mut(&message_id) {
                             message.attempts += 1;
                             internal_buf_send.send((address, message.clone())).unwrap();
@@ -238,68 +240,68 @@ async fn run_channel(
 
 async fn run_topic(
     name: String,
-    mut server2topic_channel: UnboundedReceiver<Server2TopicMessage>,
+    mut inlet: UnboundedReceiver<TopicMessage>,
     config: Arc<crate::settings::TangleArguments>,
 ) {
     info!("Spinning up a new topic {name}");
-    let mut channels: HashMap<String, UnboundedSender<Topic2ChannelMessage>> = HashMap::new();
+    let mut channels: HashMap<String, UnboundedSender<ChannelMessage>> = HashMap::new();
     let (internal_buf_send, mut internal_buffer) =
-        tokio::sync::mpsc::unbounded_channel::<(std::net::SocketAddr, Message)>();
+        tokio::sync::mpsc::unbounded_channel::<(std::net::SocketAddr, ProtocolMessage)>();
 
     loop {
         tokio::select! {
             Some((address, message)) = internal_buffer.recv(), if !channels.is_empty() => {
                 for (_, inlet) in channels.iter() {
                     inlet
-                        .send(Topic2ChannelMessage::Publish {
+                        .send(ChannelMessage::Publish {
                             address,
                             message: message.clone(),
                         })
                         .unwrap()
                 }
             }
-            Some(message) = server2topic_channel.recv() => {
+            Some(message) = inlet.recv() => {
                 match message {
-                    Server2TopicMessage::Disconnect {address} => {
+                    TopicMessage::Disconnect {address} => {
                         for (_, inlet) in channels.iter() {
                             inlet
-                                .send(Topic2ChannelMessage::Disconnect { address })
+                                .send(ChannelMessage::Disconnect { address })
                                 .unwrap()
                         }
                     }
-                    Server2TopicMessage::Subscribe {
+                    TopicMessage::Subscribe {
                         address,
                         channel_name,
                         send_back,
                         ..
                     } => {
                         let channel_inlet = channels.entry(channel_name.clone()).or_insert_with(|| {
-                            let (sender, receiver) = unbounded_channel::<Topic2ChannelMessage>();
+                            let (sender, receiver) = unbounded_channel::<ChannelMessage>();
                             tokio::spawn(run_channel(channel_name.clone(), receiver, config.clone()));
                             sender
                         });
                         channel_inlet
-                            .send(Topic2ChannelMessage::Subscribe {
+                            .send(ChannelMessage::Subscribe {
                                 address,
                                 send_back,
                             })
                             .unwrap();
                     }
-                    Server2TopicMessage::Fin {address, message_id} => {
+                    TopicMessage::Finalize {address, message_id} => {
                         for (_, inlet) in channels.iter() {
                             inlet
-                                .send(Topic2ChannelMessage::Fin { address, message_id })
+                                .send(ChannelMessage::Finalize { address, message_id })
                                 .unwrap()
                         }
                     }
-                    Server2TopicMessage::Req {address, message_id} => {
+                    TopicMessage::Requeue {address, message_id} => {
                         for (_, inlet) in channels.iter() {
                             inlet
-                                .send(Topic2ChannelMessage::Req { address, message_id })
+                                .send(ChannelMessage::Requeue { address, message_id })
                                 .unwrap()
                         }
                     }
-                    Server2TopicMessage::Publish { address, message } => {
+                    TopicMessage::Publish { address, message } => {
                         internal_buf_send.send((address, message)).unwrap();
                     }
                 }
@@ -311,78 +313,78 @@ async fn run_topic(
 
 async fn run_server(
     config: Arc<crate::settings::TangleArguments>,
-    mut client2server_channel: Receiver<Client2ServerMessage>,
+    mut inlet: Receiver<ServerMessage>,
 ) {
-    let mut topics: HashMap<String, UnboundedSender<Server2TopicMessage>> = HashMap::new();
+    let mut topics: HashMap<String, UnboundedSender<TopicMessage>> = HashMap::new();
 
-    while let Some(to_server_message) = client2server_channel.recv().await {
+    while let Some(to_server_message) = inlet.recv().await {
         match to_server_message {
-            Client2ServerMessage::Fin {
+            ServerMessage::Finalize {
                 address,
                 message_id,
             } => {
                 for (_, topic_sender) in topics.iter() {
                     topic_sender
-                        .send(Server2TopicMessage::Fin {
+                        .send(TopicMessage::Finalize {
                             address,
                             message_id,
                         })
                         .unwrap()
                 }
             }
-            Client2ServerMessage::Req {
+            ServerMessage::Requeue {
                 address,
                 message_id,
             } => {
                 for (_, topic_sender) in topics.iter() {
                     topic_sender
-                        .send(Server2TopicMessage::Req {
+                        .send(TopicMessage::Requeue {
                             address,
                             message_id,
                         })
                         .unwrap()
                 }
             }
-            Client2ServerMessage::Publish {
+            ServerMessage::Publish {
                 address,
                 topic_name,
                 message,
             } => {
                 let topic_inlet_channel = topics.entry(topic_name.clone()).or_insert_with(|| {
-                    let (sender, receiver) = unbounded_channel::<Server2TopicMessage>();
+                    let (sender, receiver) = unbounded_channel::<TopicMessage>();
                     tokio::spawn(run_topic(topic_name, receiver, config.clone()));
                     sender
                 });
                 topic_inlet_channel
-                    .send(Server2TopicMessage::Publish { address, message })
+                    .send(TopicMessage::Publish { address, message })
                     .unwrap();
             }
-            Client2ServerMessage::Subscribe {
+            ServerMessage::Subscribe {
                 address,
                 topic_name,
                 channel_name,
                 send_back,
             } => {
                 let topic_inlet_channel = topics.entry(topic_name.clone()).or_insert_with(|| {
-                    let (sender, receiver) = unbounded_channel::<Server2TopicMessage>();
+                    let (sender, receiver) = unbounded_channel::<TopicMessage>();
                     tokio::spawn(run_topic(topic_name.clone(), receiver, config.clone()));
                     sender
                 });
                 topic_inlet_channel
-                    .send(Server2TopicMessage::Subscribe {
+                    .send(TopicMessage::Subscribe {
                         address,
                         channel_name,
                         send_back,
                     })
                     .unwrap();
             }
-            Client2ServerMessage::Identify { .. } => {
+            ServerMessage::Identify { .. } => {
                 info!("IDENTIFY command is yet to be implemented")
             }
-            Client2ServerMessage::Disconnect { address } => {
+            ServerMessage::Disconnect { address } => {
                 for (_, topic_sender) in topics.iter() {
                     topic_sender
-                        .send(Server2TopicMessage::Disconnect { address })
+                        .send(TopicMessage::Disconnect { address })
                         .unwrap()
                 }
             }
@@ -396,7 +398,7 @@ where
 {
     let listener = tokio::net::TcpListener::bind(config.server_address).await?;
     let (server_channel_sender, server_channel_receiver) =
-        tokio::sync::mpsc::channel::<Client2ServerMessage>(128);
+        tokio::sync::mpsc::channel::<ServerMessage>(128);
 
     tokio::select! {
         _ = stopper => {
