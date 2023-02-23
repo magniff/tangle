@@ -15,7 +15,7 @@ use tokio::sync::mpsc::Receiver;
 
 use crate::client::Client;
 use crate::message::ProtocolMessage;
-use crate::protocol::{run_socket_mainloop, write_error_frame, E_BAD_PROTOCOL};
+use crate::protocol;
 
 #[derive(Debug)]
 pub enum Server2ClientMessage {
@@ -73,22 +73,29 @@ async fn run_network_listener(
             continue;
         }
 
-        if magic_buffer.as_slice() != b"  V2".as_slice() {
-            error!("{address}: client is using the wrong magic number -- {magic_buffer:?}");
-            if let Err(message) = write_error_frame(&mut writer, E_BAD_PROTOCOL).await {
-                error!(
-                    "{address}: unable to send the error message to the client, reason: {message}"
-                );
+        match magic_buffer.as_slice() {
+            b"  V2" => {
+                tokio::spawn(protocol::nsq_v2::run_socket_mainloop(
+                    Client::from_reader_writer(address, reader, writer),
+                    client2server_channel.clone(),
+                ));
+                info!("Client {address} is now connected using NSQ protocol V2");
             }
-            continue;
+            wrong_magic => {
+                error!("{address}: client is using the wrong magic number -- {wrong_magic:?}");
+                let error_response_result = protocol::nsq_v2::write_error_frame(
+                    &mut writer,
+                    protocol::nsq_v2::E_BAD_PROTOCOL,
+                )
+                .await;
+                if let Err(error_message) = error_response_result {
+                    error!(
+                        "{address}: unable to send the error message to the client, reason: {error_message}"
+                    );
+                };
+                continue;
+            }
         }
-
-        tokio::spawn(run_socket_mainloop(
-            Client::from_reader_writer(address, reader, writer),
-            client2server_channel.clone(),
-        ));
-
-        info!("Client {address} is now connected");
     }
 }
 
