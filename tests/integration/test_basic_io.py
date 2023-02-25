@@ -143,7 +143,7 @@ async def test_mpub():
     tangled_address = ["tangled:4150"]
 
     topic_name = uuid.uuid4().hex
-    messages_expected = [fake.binary(length=128) for _ in range(10)]
+    messages_expected = [fake.binary(length=1024) for _ in range(10000)]
     writer = await ansq.create_writer(nsqd_tcp_addresses=tangled_address)
 
     await writer.mpub(topic_name, *messages_expected)
@@ -160,5 +160,6 @@ async def test_mpub():
         actual_message = await message_with_timeout(actual_messages)
         assert actual_message is not None
         assert actual_message.body == expected_message
+        await actual_message.fin()
 
     await reader.close()

@@ -145,7 +145,13 @@ where
 
     let payload_expected_size = client.reader.read_u32().await? as usize;
     let mut identify_payload_buffer = BytesMut::with_capacity(payload_expected_size);
-    if client.reader.read_buf(&mut identify_payload_buffer).await? == 0 {
+    identify_payload_buffer.resize(payload_expected_size, 0);
+    if client
+        .reader
+        .read_exact(&mut identify_payload_buffer)
+        .await?
+        == 0
+    {
         return Ok(vec![Command::ServerCommand(ServerMessage::Disconnect {
             address: client.address,
         })]);
@@ -216,9 +222,10 @@ where
         )})]);
     };
 
-    let mut message_body_buffer = BytesMut::with_capacity(client.reader.read_u32().await? as usize);
-    // Read the body or handle the client's sudden death
-    if client.reader.read_buf(&mut message_body_buffer).await? == 0 {
+    let message_body_size = client.reader.read_u32().await? as usize;
+    let mut message_body_buffer = BytesMut::with_capacity(message_body_size);
+    message_body_buffer.resize(message_body_size, 0);
+    if client.reader.read_exact(&mut message_body_buffer).await? == 0 {
         return Ok(vec![Command::ServerCommand(ServerMessage::Disconnect {
             address: client.address,
         })]);
@@ -254,17 +261,24 @@ where
             "{E_INVALID}: PUB command should have exactly one argument"
         )})]);
     };
-
-    let _overall_size_in_bytes = client.reader.read_u32().await?;
+    // No actual use for the overall payload size
+    let _ = client.reader.read_u32().await?;
+    // How many messages are sent
     let batch_size = client.reader.read_u32().await?;
 
-    // It is important to be sure the messages are fine
+    // It is important to be sure the messages are all fine before sending it to the queue
     let mut messages = Vec::with_capacity(batch_size as usize);
     for _ in 0..batch_size {
-        let current_message_size = client.reader.read_u32().await?;
-        let mut current_message_buffer = BytesMut::with_capacity(current_message_size as usize);
+        let current_message_size = client.reader.read_u32().await? as usize;
+        let mut current_message_buffer = BytesMut::with_capacity(current_message_size);
+        current_message_buffer.resize(current_message_size, 0);
         // Read the body or handle the client's sudden death
-        if client.reader.read_buf(&mut current_message_buffer).await? == 0 {
+        if client
+            .reader
+            .read_exact(&mut current_message_buffer)
+            .await?
+            == 0
+        {
             return Ok(vec![Command::ServerCommand(ServerMessage::Disconnect {
                 address: client.address,
             })]);
