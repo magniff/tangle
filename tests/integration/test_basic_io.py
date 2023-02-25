@@ -43,7 +43,7 @@ async def test_write_many_messages_to_multiple_topics():
 
 
 async def message_with_timeout(
-    messages: typing.AsyncIterator[NSQMessage], timeout: float = 0.01
+    messages: typing.AsyncIterator[NSQMessage], timeout: float = 0.1
 ) -> typing.Optional[NSQMessage]:
     try:
         async with async_timeout.timeout(timeout):
@@ -139,11 +139,34 @@ async def test_requeue():
 
 
 @pytest.mark.asyncio
-async def test_mpub():
+@pytest.mark.parametrize(
+    "message_len,messages_count",
+    [
+        # tiny messages
+        # (8, 1),
+        (8, 8),
+        (8, 100),
+        (8, 10000),
+        (8, 100000),
+        # med messages
+        # (128, 1),
+        (128, 8),
+        (128, 100),
+        (128, 10000),
+        (2048, 8),
+        (2048, 100),
+        (2048, 1000),
+        # huge messages
+        # (2048000, 1),
+        (2048000, 4),
+        (2048000, 8),
+    ],
+)
+async def test_mpub(message_len, messages_count):
     tangled_address = ["tangled:4150"]
 
     topic_name = uuid.uuid4().hex
-    messages_expected = [fake.binary(length=1024) for _ in range(10000)]
+    messages_expected = [fake.binary(length=message_len) for _ in range(messages_count)]
     writer = await ansq.create_writer(nsqd_tcp_addresses=tangled_address)
 
     await writer.mpub(topic_name, *messages_expected)
