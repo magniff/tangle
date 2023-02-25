@@ -241,24 +241,56 @@ where
 // // [ 4-byte num messages ]
 // // [ 4-byte message #1 size ][ N-byte binary data ]
 // //       ... (repeated <num_messages> times)
-// async fn exec_mpub_command<R, W>(
-//     client: &mut crate::client::Client<R, W>,
-//     parts: &[&str],
-// ) -> Result<Vec<CommandExecResult>>
-// where
-//     R: AsyncBufRead + Unpin,
-//     W: AsyncWrite + Send + Sync + Unpin + 'static,
-// {
-//     if parts.len() != 2 {
-//         return Ok(vec![CommandExecResult::RespondProtocolError {
-//             error: format!("{E_INVALID}: MPUB command should have exactly one argument"),
-//         }]);
-//     };
-//     // TODO: implement the rest of the pub function
-//     Ok(vec![CommandExecResult::RespondProtocolOk {
-//         response: OK.to_string(),
-//     }])
-// }
+async fn exec_mpub_command<R, W>(
+    client: &mut crate::client::Client<R, W>,
+    parts: &[&str],
+) -> Result<Vec<Command>>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Send + Sync + Unpin + 'static,
+{
+    let &["MPUB", topic_name] = parts else {
+        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
+            "{E_INVALID}: PUB command should have exactly one argument"
+        )})]);
+    };
+
+    let _overall_size_in_bytes = client.reader.read_u32().await?;
+    let batch_size = client.reader.read_u32().await?;
+
+    // It is important to be sure the messages are fine
+    let mut messages = Vec::with_capacity(batch_size as usize);
+    for _ in 0..batch_size {
+        let current_message_size = client.reader.read_u32().await?;
+        let mut current_message_buffer = BytesMut::with_capacity(current_message_size as usize);
+        // Read the body or handle the client's sudden death
+        if client.reader.read_buf(&mut current_message_buffer).await? == 0 {
+            return Ok(vec![Command::ServerCommand(ServerMessage::Disconnect {
+                address: client.address,
+            })]);
+        }
+        messages.push(crate::message::ProtocolMessage::from_body(
+            current_message_buffer,
+        ));
+    }
+
+    let mut commands: Vec<Command> = messages
+        .into_iter()
+        .map(|message| {
+            Command::ServerCommand(ServerMessage::Publish {
+                address: client.address,
+                topic_name: topic_name.to_string(),
+                message,
+            })
+        })
+        .collect();
+
+    commands.push(Command::WriterCommand(WriterCommand::RespondOk {
+        response: OK.to_string(),
+    }));
+
+    Ok(commands)
+}
 
 // // DPUB <topic_name> <defer_time>\n
 // // [ 4-byte size in bytes ][ N-byte binary data ]
@@ -444,7 +476,7 @@ where
             RDY => exec_rdy_command(client, parts).await,
             FIN => exec_fin_command(client, parts).await,
             REQ => exec_req_command(client, parts).await,
-            // _ if *command == MPUB => exec_mpub_command(client, parts).await,
+            MPUB => exec_mpub_command(client, parts).await,
             // _ if *command == TOUCH => exec_touch_command(client, parts).await,
             // _ if *command == AUTH => exec_auth_command(client, parts).await,
             something_else => {

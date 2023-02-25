@@ -3,6 +3,7 @@ import typing
 import uuid
 
 import ansq
+import async_timeout
 import faker
 import pytest
 from ansq.tcp.types import NSQMessage
@@ -45,7 +46,7 @@ async def message_with_timeout(
     messages: typing.AsyncIterator[NSQMessage], timeout: float = 0.01
 ) -> typing.Optional[NSQMessage]:
     try:
-        async with asyncio.timeout(timeout):
+        async with async_timeout.timeout(timeout):
             return await anext(messages)
     except asyncio.TimeoutError:
         return None
@@ -133,5 +134,31 @@ async def test_requeue():
     assert message.body == first_message
     assert message.attempts == 3
     await message.fin()
+
+    await reader.close()
+
+
+@pytest.mark.asyncio
+async def test_mpub():
+    tangled_address = ["tangled:4150"]
+
+    topic_name = uuid.uuid4().hex
+    messages_expected = [fake.binary(length=128) for _ in range(10)]
+    writer = await ansq.create_writer(nsqd_tcp_addresses=tangled_address)
+
+    await writer.mpub(topic_name, *messages_expected)
+    await writer.close()
+
+    reader = await ansq.create_reader(
+        nsqd_tcp_addresses=tangled_address,
+        topic=topic_name,
+        channel=uuid.uuid4().hex,
+    )
+
+    actual_messages = reader.messages()
+    for expected_message in messages_expected:
+        actual_message = await message_with_timeout(actual_messages)
+        assert actual_message is not None
+        assert actual_message.body == expected_message
 
     await reader.close()
