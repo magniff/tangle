@@ -143,6 +143,7 @@ async def test_requeue():
     "message_len,messages_count",
     [
         # tiny messages
+        # MPUBing just a single message seems to be broken in ansq
         # (8, 1),
         (8, 8),
         (8, 100),
