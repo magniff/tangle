@@ -306,27 +306,6 @@ where
     Ok(commands)
 }
 
-// // DPUB <topic_name> <defer_time>\n
-// // [ 4-byte size in bytes ][ N-byte binary data ]
-// async fn exec_dpub_command<R, W>(
-//     client: &mut crate::client::Client<R, W>,
-//     parts: &[&str],
-// ) -> Result<Vec<CommandExecResult>>
-// where
-//     R: AsyncBufRead + Unpin,
-//     W: AsyncWrite + Send + Sync + Unpin + 'static,
-// {
-//     if parts.len() != 3 {
-//         return Ok(vec![CommandExecResult::RespondProtocolError {
-//             error: format!("{E_INVALID}: DPUB command should have exactly two argument"),
-//         }]);
-//     };
-//     // TODO: implement the rest of the pub function
-//     Ok(vec![CommandExecResult::RespondProtocolOk {
-//         response: OK.to_string(),
-//     }])
-// }
-
 // RDY <count>\n
 // <count> - a string representation of integer N where 0 < N <= configured_max
 async fn exec_rdy_command<R, W>(
@@ -407,26 +386,6 @@ where
     }
 }
 
-// // TOUCH <message_id>\n
-// // <message_id> - the hex id of the message
-// async fn exec_touch_command<R, W>(
-//     client: &mut crate::client::Client<R, W>,
-//     parts: &[&str],
-// ) -> Result<CommandExecResult>
-// where
-//     R: AsyncBufRead + Unpin,
-//     W: AsyncWrite + Unpin + 'static,
-// {
-//     if parts.len() != 2 {
-//         return Ok(CommandExecResult::RespondProtocolError(format!(
-//             "{}: {}",
-//             E_INVALID, "TOUCH command should have exactly one argument"
-//         )));
-//     };
-//     // TODO: implement the rest of the pub function
-//     Ok(CommandExecResult::Nop)
-// }
-
 // CLS\n
 async fn exec_cls_command<R, W>(
     client: &mut crate::client::Client<R, W>,
@@ -446,26 +405,6 @@ where
         address: client.address,
     })])
 }
-
-// // AUTH\n
-// // [ 4-byte size in bytes ][ N-byte Auth Secret ]
-// async fn exec_auth_command<R, W>(
-//     client: &mut crate::client::Client<R, W>,
-//     parts: &[&str],
-// ) -> Result<CommandExecResult>
-// where
-//     R: AsyncBufRead + Unpin,
-//     W: AsyncWrite + Unpin + 'static,
-// {
-//     if parts.len() != 1 {
-//         return Ok(CommandExecResult::RespondProtocolError(format!(
-//             "{}: {}",
-//             E_INVALID, "AUTH command can't have any arguments",
-//         )));
-//     };
-//     // TODO: implement the rest of the pub function
-//     Ok(CommandExecResult::RespondProtocolOk("{}".to_string()))
-// }
 
 async fn exec_command<R, W>(
     client: &mut crate::client::Client<R, W>,
@@ -491,8 +430,6 @@ where
             FIN => exec_fin_command(client, parts).await,
             REQ => exec_req_command(client, parts).await,
             MPUB => exec_mpub_command(client, parts).await,
-            // _ if *command == TOUCH => exec_touch_command(client, parts).await,
-            // _ if *command == AUTH => exec_auth_command(client, parts).await,
             something_else => {
                 error!("Got unknown command: {something_else}");
                 Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
