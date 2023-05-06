@@ -2,7 +2,7 @@
 WIP implementation of the [NSQ](https://nsq.io/) message queue in Rust.
 
 # Tests
-Integration tests are all written in Python and are using [ansq](https://github.com/list-family) library. That's on purpose, although at this point the server is fairly compatible with any client implementation out there. To run the test suite:
+Integration tests are all written in Python and are using [ansq](https://github.com/list-family/ansq) library. Have a looksy at their [example](https://github.com/list-family/ansq#consumer). That's on purpose, although at this point the server is fairly compatible with any client implementation out there. To run the test suite:
 
 ```bash
 $ DOCKER_BUILDKIT=1 ./tests/runtests.sh ./tests
