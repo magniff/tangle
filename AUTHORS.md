@@ -1,2 +1,2 @@
 # Original authors
-Aleksanr Koshkin (magniff)
+Aleksandr Koshkin (magniff)
