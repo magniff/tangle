@@ -1,21 +1,23 @@
-use anyhow;
 use clap::Parser;
-use tokio;
+use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let switch_arguments = tangle::settings::TangleArguments::parse();
+fn main() -> anyhow::Result<()> {
+    let arguments = Arc::new(tangle::settings::TangleArguments::parse());
 
     simplelog::TermLogger::init(
-        switch_arguments.log_level,
+        arguments.log_level,
         simplelog::Config::default(),
         simplelog::TerminalMode::Mixed,
         simplelog::ColorChoice::Auto,
     )?;
 
-    tangle::server::run(
-        tokio::net::TcpListener::bind(switch_arguments.server_address).await?,
-        tokio::signal::ctrl_c(),
-    )
-    .await
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(arguments.worker_threads as usize)
+        .enable_io()
+        .build()
+        .unwrap();
+
+    runtime.block_on(async move {
+        tangle::server::run_tangled(arguments.clone(), tokio::signal::ctrl_c()).await
+    })
 }

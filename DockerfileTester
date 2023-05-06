@@ -2,8 +2,11 @@ FROM python:3.10-bullseye
 
 RUN python -m pip install poetry
 
-COPY tests tests
+RUN mkdir /usr/src/app
+WORKDIR /usr/src/app
+
 COPY poetry.lock poetry.lock
 COPY pyproject.toml pyproject.toml
 
 RUN poetry install
+COPY tests tests
