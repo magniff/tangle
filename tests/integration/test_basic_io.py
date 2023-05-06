@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import typing
 import uuid
 
@@ -11,28 +12,45 @@ from ansq.tcp.types import NSQMessage
 fake = faker.Faker()
 
 
+@dataclasses.dataclass
+class ManyMessagesIterm:
+    message_size: int
+    message_count: int
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "message_len,message_count",
+    "test_item",
     [
-        # (0, 100),
-        (1024, 10),
-        (1024, 100),
-        (1024, 1000),
+        ManyMessagesIterm(message_size=16, message_count=10),
+        ManyMessagesIterm(message_size=16, message_count=100),
+        ManyMessagesIterm(message_size=16, message_count=300),
+        ManyMessagesIterm(message_size=512, message_count=10),
+        ManyMessagesIterm(message_size=512, message_count=100),
+        ManyMessagesIterm(message_size=512, message_count=300),
+        ManyMessagesIterm(message_size=1024, message_count=10),
+        ManyMessagesIterm(message_size=1024, message_count=100),
+        ManyMessagesIterm(message_size=1024, message_count=300),
+        ManyMessagesIterm(message_size=1024 * 10, message_count=10),
+        ManyMessagesIterm(message_size=1024 * 10, message_count=100),
+        ManyMessagesIterm(message_size=1024 * 10, message_count=300),
     ],
 )
-async def test_write_many_messages_to_multiple_topics(message_len, message_count):
+async def test_write_many_messages_to_multiple_topics(test_item: ManyMessagesIterm):
+    how_many_toics = 5
+    how_many_channels = 5
+
     tangled_address = ["tangled:4150"]
     writer = await ansq.create_writer(nsqd_tcp_addresses=tangled_address)
     data = [
         (
             uuid.uuid4().hex,
             [
-                fake.binary(length=message_len)
-                for _message_count in range(message_count)
+                fake.binary(length=test_item.message_size)
+                for _message_count in range(test_item.message_count)
             ],
         )
-        for _topic_count in range(10)
+        for _topic_count in range(how_many_toics)
     ]
 
     for topic_name, messages in data:
@@ -42,7 +60,7 @@ async def test_write_many_messages_to_multiple_topics(message_len, message_count
                 topic=topic_name,
                 channel=uuid.uuid4().hex,
             )
-            for reader_index in range(5)
+            for reader_index in range(how_many_channels)
         ]
 
         for message in messages:
@@ -70,12 +88,11 @@ async def message_with_timeout(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip
 async def test_max_in_flight():
     tangled_address = ["tangled:4150"]
 
     topic_name = uuid.uuid4().hex
-    data = [fake.binary(length=1024) for _ in range(40)]
+    data = [fake.binary(length=128) for _ in range(10)]
 
     writer = await ansq.create_writer(nsqd_tcp_addresses=tangled_address)
     for message in data:
@@ -86,24 +103,16 @@ async def test_max_in_flight():
         topic=topic_name,
         channel=uuid.uuid4().hex,
     )
-
-    messages = reader.messages()
-
-    # The first <max-in-flight: 16> messages should be available without acknoledgment
-    messages_first_batch = [await anext(messages) for _ in range(16)]
-
+    # ansq happen to set the RDY flag to 1, which means that only one message can be in flight at a time
+    first_message = await anext(reader.messages())
     # The next message should not be available until at leas something is FINed or REQed
     assert await message_with_timeout(reader.messages()) is None
-
     # By finalizing the first message we unlock a new message to receive
-    await messages_first_batch[0].fin()
-
+    await first_message.fin()
     # Now this call should yield a new message insteand of None
     assert await message_with_timeout(reader.messages()) is not None
-
     # And the next attempt should fail again
     assert await message_with_timeout(reader.messages()) is None
-
     await reader.close()
     await writer.close()
 

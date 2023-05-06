@@ -75,7 +75,7 @@ pub struct Client<R, W> {
 impl<R, W> Client<R, W> {
     pub fn from_reader_writer(address: std::net::SocketAddr, reader: R, writer: W) -> Self
     where
-        R: AsyncBufRead + Unpin,
+        R: AsyncBufRead,
         W: AsyncWrite + Unpin,
     {
         Self {
