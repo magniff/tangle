@@ -57,7 +57,7 @@ async fn channel_worker(
     mut messages: UnboundedReceiver<NSQMessage>,
     mut notifications: UnboundedReceiver<WorkerNotification>,
 ) {
-    log::info!("Spinning up a new channel worker {channel_name}");
+    log::trace!("Spinning up a channel worker: {channel_name}");
     let mut generator = rand::rngs::StdRng::from_entropy();
 
     let mut clients = HashMap::<SocketAddr, ClientDescriptor>::with_capacity(256);
@@ -136,15 +136,13 @@ struct ChannelIO {
 }
 
 pub async fn run_topic(
-    name: String,
+    topic_name: String,
     mut messages: UnboundedReceiver<Message>,
     _config: Arc<crate::settings::TangleArguments>,
 ) -> anyhow::Result<()> {
-    log::info!("Spinning up a new topic {name}");
+    log::trace!("Spinning up a topic worker: {topic_name}");
 
-    // We need this buffer to store messages when there're no channels yet
     let (buffer_sender, mut buffer_receiver) = unbounded_channel::<Arc<Bytes>>();
-
     let mut channels_io = HashMap::<String, ChannelIO>::new();
     let mut mid_to_channel_mapping =
         HashMap::<[u8; 16], UnboundedSender<WorkerNotification>>::new();

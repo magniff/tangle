@@ -31,8 +31,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite,
 {
-    let &["IDENTIFY"] = parts else {
-        log::warn!("IDENTIFY command is broken");
+    let &[super::constants::IDENTIFY] = parts else {
         return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
             "{invalid}: IDENTIFY command can't have any arguments", invalid=super::constants::E_INVALID
         )})]);
@@ -85,7 +84,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite,
 {
-    let &["SUB", topic_name, channel_name] = parts else {
+    let &[super::constants::SUB, topic_name, channel_name] = parts else {
         return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
             "{invalid}: SUB command must have exactly two arguments: topic_name & channel_name",
             invalid=super::constants::E_INVALID
@@ -115,7 +114,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite,
 {
-    let &["PUB", topic_name] = parts else {
+    let &[super::constants::PUB, topic_name] = parts else {
         return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
             "{invalid}: PUB command should have exactly one argument", invalid=super::constants::E_INVALID,
         )})]);
@@ -124,6 +123,7 @@ where
     let message_body_size = client.reader.read_u32().await? as usize;
     let mut message_body_buffer = BytesMut::with_capacity(message_body_size);
     message_body_buffer.resize(message_body_size, 0);
+
     if client.reader.read_exact(&mut message_body_buffer).await? == 0 {
         return Ok(vec![Command::ServerCommand(
             crate::components::server::Message::Disconnect {
@@ -157,7 +157,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite,
 {
-    let &["MPUB", topic_name] = parts else {
+    let &[super::constants::MPUB, topic_name] = parts else {
         return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
             "{invalid}: PUB command should have exactly one argument", invalid=super::constants::E_INVALID
         )})]);
@@ -217,7 +217,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite,
 {
-    let &["RDY", count_string] = parts else {
+    let &[super::constants::RDY, count_string] = parts else {
         return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
             error: format!(
                 "{invalid}: RDY command should have exactly one argument",
@@ -253,7 +253,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite,
 {
-    let &["FIN", message_id] = parts else {
+    let &[super::constants::FIN, message_id] = parts else {
         return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
             error: format!(
                 "{invalid}: FIN command should have exactly one argument",
@@ -292,7 +292,7 @@ where
     W: AsyncWrite,
 {
     // For now we'll ommit the requeue timeout
-    let &["REQ", message_id, _] = parts else {
+    let &[super::constants::REQ, message_id, _] = parts else {
         return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
             error: format!(
                 "{invalid}: REQ command should have exactly two arguments",
@@ -324,7 +324,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite,
 {
-    let &["CLS"] = parts else {
+    let &[super::constants::CLS] = parts else {
         return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
             error: format!(
                 "{invalid}: RDY command should have exactly one argument",
@@ -353,8 +353,8 @@ where
         address = client.address.to_string()
     );
 
-    if let Some(command) = parts.first() {
-        return match *command {
+    if let &[command, ..] = parts {
+        return match command {
             super::constants::NOP => Ok(vec![Command::Nop]),
             super::constants::CLS => exec_cls_command(client, parts).await,
             super::constants::IDENTIFY => exec_identify_command(client, parts).await,
