@@ -39,7 +39,8 @@ where
 
     let payload_expected_size = client.reader.read_u32().await? as usize;
     let mut identify_payload_buffer = BytesMut::with_capacity(payload_expected_size);
-    identify_payload_buffer.resize(payload_expected_size, 0);
+    unsafe { identify_payload_buffer.set_len(payload_expected_size) };
+
     if client
         .reader
         .read_exact(&mut identify_payload_buffer)
@@ -122,7 +123,7 @@ where
 
     let message_body_size = client.reader.read_u32().await? as usize;
     let mut message_body_buffer = BytesMut::with_capacity(message_body_size);
-    message_body_buffer.resize(message_body_size, 0);
+    unsafe { message_body_buffer.set_len(message_body_size) };
 
     if client.reader.read_exact(&mut message_body_buffer).await? == 0 {
         return Ok(vec![Command::ServerCommand(
@@ -172,7 +173,8 @@ where
     for _ in 0..batch_size {
         let current_message_size = client.reader.read_u32().await? as usize;
         let mut current_message_buffer = BytesMut::with_capacity(current_message_size);
-        current_message_buffer.resize(current_message_size, 0);
+        unsafe { current_message_buffer.set_len(current_message_size) };
+
         // Read the body or handle the client's sudden death
         if client
             .reader
