@@ -58,10 +58,12 @@ async fn channel_worker(
     mut notifications: UnboundedReceiver<WorkerNotification>,
 ) {
     log::trace!("Spinning up a channel worker: {channel_name}");
-    let mut generator = rand::rngs::StdRng::from_entropy();
+    let mut rng = rand::rngs::StdRng::from_entropy();
 
     let mut clients = HashMap::<SocketAddr, ClientDescriptor>::with_capacity(256);
+    // Messages that havent been acked yet
     let mut pending_messages = HashMap::<[u8; 16], NSQMessage>::with_capacity(1024);
+    // Map from the unacked message to its original consumer
     let mut pending_message_to_address = HashMap::<[u8; 16], SocketAddr>::with_capacity(1024);
 
     // We need this buffer to store messages when that're no clients yet
@@ -83,8 +85,9 @@ async fn channel_worker(
                         }
                     },
                     WorkerNotification::MessageRequeued(message_id) => {
-                        if let Some(client_address) = pending_message_to_address.get(&message_id) {
-                            if let Some(descriptor) = clients.get_mut(client_address) {
+                        // The requeued message may be processed by someone else, so remove the mapping endtry
+                        if let Some(client_address) = pending_message_to_address.remove(&message_id) {
+                            if let Some(descriptor) = clients.get_mut(&client_address) {
                                 descriptor.capacity += 1;
                             }
                         }
@@ -109,15 +112,13 @@ async fn channel_worker(
             nsq_message = internal_receiver.recv(),
                 if clients.values().map(|descriptor| descriptor.capacity).any(|value| value > 0) =>
             {
-                let (address, descriptor) = clients
+                let (&address, descriptor) = clients
                     .iter_mut()
                     .filter(|(_, descriptor)| descriptor.capacity > 0)
-                    .choose(&mut generator)
+                    .choose(&mut rng)
                     .unwrap();
 
-                let address = *address;
                 descriptor.capacity -= 1;
-
                 pending_message_to_address.insert(nsq_message.id, address);
                 pending_messages.insert(nsq_message.id, nsq_message.clone());
 
