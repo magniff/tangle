@@ -54,7 +54,8 @@ enum WorkerNotification {
 
 async fn channel_worker(
     channel_name: String,
-    mut messages: UnboundedReceiver<NSQMessage>,
+    messages_receiver: super::pq::PQReceiver<NSQMessage>,
+    messages_sender: super::pq::PQSender<NSQMessage>,
     mut notifications: UnboundedReceiver<WorkerNotification>,
 ) {
     log::trace!("Spinning up a channel worker: {channel_name}");
@@ -66,14 +67,8 @@ async fn channel_worker(
     // Map from the unacked message to its original consumer
     let mut pending_message_to_address = HashMap::<[u8; 16], SocketAddr>::with_capacity(1024);
 
-    // We need this buffer to store messages when that're no clients yet
-    let (internal_sender, internal_receiver) = super::pq::pq_channel::<NSQMessage>();
-
     loop {
         tokio::select! {
-            Some(message) = messages.recv() => {
-                internal_sender.send(message).await;
-            }
             Some(notification) = notifications.recv() => {
                 match notification {
                     WorkerNotification::MessageAcked(message_id) => {
@@ -93,7 +88,7 @@ async fn channel_worker(
                         }
                         if let Some(pending_message) = pending_messages.get_mut(&message_id) {
                             pending_message.attempts += 1;
-                            internal_sender.send(pending_message.clone()).await;
+                            messages_sender.send(pending_message.clone()).await;
                         }
                     },
                     WorkerNotification::SetCapacity(address, read_value) => {
@@ -109,7 +104,7 @@ async fn channel_worker(
                     }
                 }
             }
-            nsq_message = internal_receiver.recv(),
+            Some(nsq_message) = messages_receiver.recv(),
                 if clients.values().map(|descriptor| descriptor.capacity).any(|value| value > 0) =>
             {
                 let (&address, descriptor) = clients
@@ -132,7 +127,7 @@ async fn channel_worker(
 }
 
 struct ChannelIO {
-    messages: UnboundedSender<NSQMessage>,
+    messages: super::pq::PQSender<NSQMessage>,
     notifications: UnboundedSender<WorkerNotification>,
 }
 
@@ -154,7 +149,7 @@ pub async fn run_topic(
                 for io_pair in channels_io.values() {
                     let nsq_message = NSQMessage::from_body(message.clone());
                     mid_to_channel_mapping.insert(nsq_message.id, io_pair.notifications.clone());
-                    io_pair.messages.send(nsq_message).unwrap();
+                    io_pair.messages.send(nsq_message).await;
                 }
             }
             Some(message) = messages.recv() => {
@@ -176,12 +171,12 @@ pub async fn run_topic(
                     } => {
                         let channel_io_pair = channels_io.entry(channel_name.clone()).or_insert_with(|| {
                             let (message_sender, message_receiver) =
-                                unbounded_channel::<NSQMessage>();
+                                super::pq::pq_channel::<NSQMessage>();
                             let (notification_sender, notification_receiver) =
                                 unbounded_channel::<WorkerNotification>();
                             tokio::spawn(
                                 channel_worker(
-                                    channel_name, message_receiver, notification_receiver
+                                    channel_name, message_receiver, message_sender.clone(), notification_receiver
                                 )
                             );
                             ChannelIO { messages: message_sender, notifications: notification_sender }

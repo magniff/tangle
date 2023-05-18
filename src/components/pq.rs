@@ -13,6 +13,7 @@ struct Shared<T> {
     available: Notify,
 }
 
+#[derive(Clone)]
 pub struct PQSender<T> {
     shared: Arc<Shared<T>>,
 }
@@ -22,8 +23,7 @@ where
     T: Ord,
 {
     pub async fn send(&self, value: T) {
-        let mut inner_guard = self.shared.inner.lock().await;
-        inner_guard.queue.push(Reverse(value));
+        self.shared.inner.lock().await.queue.push(Reverse(value));
         self.shared.available.notify_one();
     }
 }
@@ -36,12 +36,13 @@ impl<T> PQReceiver<T>
 where
     T: Ord,
 {
-    pub async fn recv(&self) -> T {
-        let mut inner_lock = self.shared.inner.lock().await;
+    pub async fn recv(&self) -> Option<T> {
         loop {
-            match inner_lock.queue.pop() {
+            // Get the value and release the lock ASAP
+            let poped_value = self.shared.inner.lock().await.queue.pop();
+            match poped_value {
                 None => self.shared.available.notified().await,
-                Some(value) => break value.0,
+                Some(value) => break Some(value.0),
             }
         }
     }
