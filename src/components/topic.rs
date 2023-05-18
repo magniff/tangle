@@ -88,7 +88,7 @@ async fn channel_worker(
                         }
                         if let Some(pending_message) = pending_messages.get_mut(&message_id) {
                             pending_message.attempts += 1;
-                            messages_sender.send(pending_message.clone()).await;
+                            messages_sender.send(pending_message.clone());
                         }
                     },
                     WorkerNotification::SetCapacity(address, read_value) => {
@@ -149,7 +149,7 @@ pub async fn run_topic(
                 for io_pair in channels_io.values() {
                     let nsq_message = NSQMessage::from_body(message.clone());
                     mid_to_channel_mapping.insert(nsq_message.id, io_pair.notifications.clone());
-                    io_pair.messages.send(nsq_message).await;
+                    io_pair.messages.send(nsq_message);
                 }
             }
             Some(message) = messages.recv() => {

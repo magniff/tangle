@@ -1,8 +1,8 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 
 struct Inner<T> {
     queue: BinaryHeap<Reverse<T>>,
@@ -22,8 +22,8 @@ impl<T> PQSender<T>
 where
     T: Ord,
 {
-    pub async fn send(&self, value: T) {
-        self.shared.inner.lock().await.queue.push(Reverse(value));
+    pub fn send(&self, value: T) {
+        self.shared.inner.lock().unwrap().queue.push(Reverse(value));
         self.shared.available.notify_one();
     }
 }
@@ -39,7 +39,7 @@ where
     pub async fn recv(&self) -> Option<T> {
         loop {
             // Get the value and release the lock ASAP
-            let poped_value = self.shared.inner.lock().await.queue.pop();
+            let poped_value = self.shared.inner.lock().unwrap().queue.pop();
             match poped_value {
                 None => self.shared.available.notified().await,
                 Some(value) => break Some(value.0),
