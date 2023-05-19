@@ -5,7 +5,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 use log;
 use rand::{self, prelude::IteratorRandom, SeedableRng};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    Notify,
+};
 
 use super::client::Message as ClientMessage;
 use crate::message::NSQMessage;
@@ -38,6 +41,7 @@ pub enum Message {
     },
 }
 
+#[derive(Debug)]
 struct ClientDescriptor {
     queue: UnboundedSender<ClientMessage>,
     capacity: usize,
@@ -59,13 +63,12 @@ async fn channel_worker(
     mut notifications: UnboundedReceiver<WorkerNotification>,
 ) {
     log::trace!("Spinning up a channel worker: {channel_name}");
-    let mut rng = rand::rngs::StdRng::from_entropy();
 
+    let mut rng = rand::rngs::StdRng::from_entropy();
     let mut clients = HashMap::<SocketAddr, ClientDescriptor>::with_capacity(256);
-    // Messages that havent been acked yet
     let mut pending_messages = HashMap::<[u8; 16], NSQMessage>::with_capacity(1024);
-    // Map from the unacked message to its original consumer
     let mut pending_message_to_address = HashMap::<[u8; 16], SocketAddr>::with_capacity(1024);
+    let someone_is_waiting = Notify::new();
 
     loop {
         tokio::select! {
@@ -76,6 +79,7 @@ async fn channel_worker(
                         if let Some(address) = pending_message_to_address.remove(&message_id) {
                             if let Some(descriptor) = clients.get_mut(&address) {
                                 descriptor.capacity += 1;
+                                someone_is_waiting.notify_one();
                             }
                         }
                     },
@@ -84,6 +88,7 @@ async fn channel_worker(
                         if let Some(client_address) = pending_message_to_address.remove(&message_id) {
                             if let Some(descriptor) = clients.get_mut(&client_address) {
                                 descriptor.capacity += 1;
+                                someone_is_waiting.notify_one();
                             }
                         }
                         if let Some(pending_message) = pending_messages.get_mut(&message_id) {
@@ -94,6 +99,7 @@ async fn channel_worker(
                     WorkerNotification::SetCapacity(address, read_value) => {
                         if let Some(descriptor) = clients.get_mut(&address) {
                             descriptor.capacity = read_value;
+                            someone_is_waiting.notify_one();
                         }
                     }
                     WorkerNotification::ClientDisconnected(address) => {
@@ -104,22 +110,26 @@ async fn channel_worker(
                     }
                 }
             }
-            Some(nsq_message) = messages_receiver.recv(),
-                if clients.values().map(|descriptor| descriptor.capacity).any(|value| value > 0) =>
-            {
-                let (&address, descriptor) = clients
+            _ = someone_is_waiting.notified() => {
+               while let Some((&address, descriptor)) = clients
                     .iter_mut()
                     .filter(|(_, descriptor)| descriptor.capacity > 0)
-                    .choose(&mut rng)
-                    .unwrap();
-
-                descriptor.capacity -= 1;
-                pending_message_to_address.insert(nsq_message.id, address);
-                pending_messages.insert(nsq_message.id, nsq_message.clone());
-
-                if descriptor.queue.send(ClientMessage::PushMessage { message: nsq_message }).is_err() {
-                    clients.remove(&address);
-                }
+                    .choose(&mut rng) {
+                        while descriptor.capacity > 0 {
+                            let message = messages_receiver.recv().await.unwrap();
+                            let message_id = message.id;
+                            descriptor.capacity -= 1;
+                            // Trying to push the message to the client's io task
+                            if descriptor.queue.send(ClientMessage::PushMessage { message: message.clone() }).is_err() {
+                                clients.remove(&address);
+                                messages_sender.send(message);
+                                break;
+                            }
+                            // Registring message as in-flight only if the client was alive
+                            pending_messages.insert(message_id, message);
+                            pending_message_to_address.insert(message_id, address);
+                        }
+                    }
             }
             else => break
         }
