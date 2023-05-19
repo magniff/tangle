@@ -60,7 +60,8 @@ async fn channel_worker(
     channel_name: String,
     messages_receiver: super::pq::PQReceiver<NSQMessage>,
     messages_sender: super::pq::PQSender<NSQMessage>,
-    mut notifications: UnboundedReceiver<WorkerNotification>,
+    mut notifications_receiver: UnboundedReceiver<WorkerNotification>,
+    notifications_sender: UnboundedSender<WorkerNotification>,
 ) {
     log::trace!("Spinning up a channel worker: {channel_name}");
 
@@ -72,7 +73,7 @@ async fn channel_worker(
 
     loop {
         tokio::select! {
-            Some(notification) = notifications.recv() => {
+            Some(notification) = notifications_receiver.recv() => {
                 match notification {
                     WorkerNotification::MessageAcked(message_id) => {
                         pending_messages.remove(&message_id);
@@ -121,7 +122,9 @@ async fn channel_worker(
                             descriptor.capacity -= 1;
                             // Trying to push the message to the client's io task
                             if descriptor.queue.send(ClientMessage::PushMessage { message: message.clone() }).is_err() {
-                                clients.remove(&address);
+                                notifications_sender
+                                    .send(WorkerNotification::ClientDisconnected(address))
+                                    .unwrap();
                                 messages_sender.send(message);
                                 break;
                             }
@@ -180,13 +183,16 @@ pub async fn run_topic(
                         back_to_client,
                     } => {
                         let channel_io_pair = channels_io.entry(channel_name.clone()).or_insert_with(|| {
-                            let (message_sender, message_receiver) =
-                                super::pq::pq_channel::<NSQMessage>();
+                            let (message_sender, message_receiver) = super::pq::pq_channel::<NSQMessage>();
                             let (notification_sender, notification_receiver) =
                                 unbounded_channel::<WorkerNotification>();
                             tokio::spawn(
                                 channel_worker(
-                                    channel_name, message_receiver, message_sender.clone(), notification_receiver
+                                    channel_name,
+                                    message_receiver,
+                                    message_sender.clone(),
+                                    notification_receiver,
+                                    notification_sender.clone(),
                                 )
                             );
                             ChannelIO { messages: message_sender, notifications: notification_sender }
