@@ -121,7 +121,10 @@ async fn channel_worker(
                             let message_id = message.id;
                             descriptor.capacity -= 1;
                             // Trying to push the message to the client's io task
-                            if descriptor.queue.send(ClientMessage::PushMessage { message: message.clone() }).is_err() {
+                            if descriptor.queue
+                                .send(ClientMessage::PushMessage { message: message.clone() })
+                                .is_err()
+                            {
                                 notifications_sender
                                     .send(WorkerNotification::ClientDisconnected(address))
                                     .unwrap();
