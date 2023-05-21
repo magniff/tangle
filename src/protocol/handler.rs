@@ -1,22 +1,23 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use bytes::BytesMut;
 use serde_json;
 use std::convert::TryInto;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::client::{IdentifyData, IdentifyResponse};
+use crate::{
+    client::{IdentifyData, IdentifyResponse},
+    protocol::constants::E_INVALID,
+};
 
 #[derive(Debug)]
 enum WriterCommand {
     RespondOk { response: String },
-    RespondErr { error: String },
 }
 
 #[derive(Debug)]
 enum Command {
-    Nop,
     WriterCommand(WriterCommand),
     ServerCommand(crate::components::server::Message),
 }
@@ -32,9 +33,7 @@ where
     W: AsyncWrite,
 {
     let &[super::constants::IDENTIFY] = parts else {
-        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
-            "{invalid}: IDENTIFY command can't have any arguments", invalid=super::constants::E_INVALID
-        )})]);
+        bail!("{invalid}: IDENTIFY command can't have any arguments", invalid=super::constants::E_INVALID)
     };
 
     let payload_expected_size = client.reader.read_u32().await? as usize;
@@ -45,13 +44,9 @@ where
         .reader
         .read_exact(&mut identify_payload_buffer)
         .await?
-        == 0
+        != identify_payload_buffer.len()
     {
-        return Ok(vec![Command::ServerCommand(
-            crate::components::server::Message::Disconnect {
-                address: client.address,
-            },
-        )]);
+        bail!(super::constants::E_BAD_BODY)
     }
 
     let identify_data: IdentifyData = serde_json::from_slice(identify_payload_buffer.as_ref())?;
@@ -86,10 +81,10 @@ where
     W: AsyncWrite,
 {
     let &[super::constants::SUB, topic_name, channel_name] = parts else {
-        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
+        bail!(
             "{invalid}: SUB command must have exactly two arguments: topic_name & channel_name",
             invalid=super::constants::E_INVALID
-        )})]);
+        )
     };
 
     Ok(vec![
@@ -116,21 +111,18 @@ where
     W: AsyncWrite,
 {
     let &[super::constants::PUB, topic_name] = parts else {
-        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
-            "{invalid}: PUB command should have exactly one argument", invalid=super::constants::E_INVALID,
-        )})]);
+        bail!(
+            "{invalid}: PUB command should have exactly one argument",
+            invalid=super::constants::E_INVALID
+        )
     };
 
     let message_body_size = client.reader.read_u32().await? as usize;
     let mut message_body_buffer = BytesMut::with_capacity(message_body_size);
     unsafe { message_body_buffer.set_len(message_body_size) };
 
-    if client.reader.read_exact(&mut message_body_buffer).await? == 0 {
-        return Ok(vec![Command::ServerCommand(
-            crate::components::server::Message::Disconnect {
-                address: client.address,
-            },
-        )]);
+    if client.reader.read_exact(&mut message_body_buffer).await? != message_body_size {
+        bail!(super::constants::E_BAD_BODY)
     }
 
     Ok(vec![
@@ -159,11 +151,11 @@ where
     W: AsyncWrite,
 {
     let &[super::constants::MPUB, topic_name] = parts else {
-        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
+        bail!(
             "{invalid}: PUB command should have exactly one argument", invalid=super::constants::E_INVALID
-        )})]);
+        )
     };
-    // No actual use for the overall payload size
+    // There's no actual use for the overall payload size
     let _ = client.reader.read_u32().await?;
     // How many messages are sent
     let batch_size = client.reader.read_u32().await?;
@@ -180,13 +172,9 @@ where
             .reader
             .read_exact(&mut current_message_buffer)
             .await?
-            == 0
+            != current_message_size
         {
-            return Ok(vec![Command::ServerCommand(
-                crate::components::server::Message::Disconnect {
-                    address: client.address,
-                },
-            )]);
+            bail!(super::constants::E_BAD_BODY)
         }
         messages.push(Arc::new(current_message_buffer.freeze()));
     }
@@ -220,21 +208,17 @@ where
     W: AsyncWrite,
 {
     let &[super::constants::RDY, count_string] = parts else {
-        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
-            error: format!(
-                "{invalid}: RDY command should have exactly one argument",
-                invalid=super::constants::E_INVALID
-            ),
-        })]);
+        bail!(
+            "{invalid}: RDY command should have exactly one argument",
+            invalid=super::constants::E_INVALID
+        )
     };
 
     let Ok(capacity) = count_string.parse::<usize>()else {
-        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
-            error: format!(
-                "{invalid}: RDY command should have a numeric count argument",
-                invalid=super::constants::E_INVALID
-            ),
-        })]);
+        bail!(
+            "{invalid}: RDY command should have a numeric count argument",
+            invalid=super::constants::E_INVALID
+        )
     };
 
     Ok(vec![Command::ServerCommand(
@@ -256,28 +240,27 @@ where
     W: AsyncWrite,
 {
     let &[super::constants::FIN, message_id] = parts else {
-        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
-            error: format!(
-                "{invalid}: FIN command should have exactly one argument",
-                invalid=super::constants::E_INVALID
-            ),
-        })]);
+        bail!(
+            "{invalid}: FIN command should have exactly one argument",
+            invalid=super::constants::E_INVALID
+        )
     };
 
-    match TryInto::<[u8; 16]>::try_into(message_id.as_bytes()) {
-        Ok(buffer) => Ok(vec![Command::ServerCommand(
-            crate::components::server::Message::Finalize {
-                address: client.address,
-                message_id: buffer,
-            },
-        )]),
-        Err(reason) => Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
-            error: format!(
+    TryInto::<[u8; 16]>::try_into(message_id.as_bytes())
+        .map(|buffer| {
+            vec![Command::ServerCommand(
+                crate::components::server::Message::Finalize {
+                    address: client.address,
+                    message_id: buffer,
+                },
+            )]
+        })
+        .map_err(|reason| {
+            anyhow!(
                 "{bad_message}: message id should be exactly 16 bytes long, error: {reason}",
                 bad_message = super::constants::E_BAD_MESSAGE
-            ),
-        })]),
-    }
+            )
+        })
 }
 
 // REQ <message_id> <timeout>\n
@@ -295,26 +278,26 @@ where
 {
     // For now we'll ommit the requeue timeout
     let &[super::constants::REQ, message_id, _] = parts else {
-        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
-            error: format!(
-                "{invalid}: REQ command should have exactly two arguments",
-                invalid=super::constants::E_INVALID),
-        })]);
+        bail!(
+            "{invalid}: REQ command should have exactly two arguments",
+            invalid=super::constants::E_INVALID
+        );
     };
-    match TryInto::<[u8; 16]>::try_into(message_id.as_bytes()) {
-        Ok(buffer) => Ok(vec![Command::ServerCommand(
-            crate::components::server::Message::Requeue {
-                address: client.address,
-                message_id: buffer,
-            },
-        )]),
-        Err(reason) => Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
-            error: format!(
+    TryInto::<[u8; 16]>::try_into(message_id.as_bytes())
+        .map(|message_id| {
+            vec![Command::ServerCommand(
+                crate::components::server::Message::Requeue {
+                    address: client.address,
+                    message_id,
+                },
+            )]
+        })
+        .map_err(|reason| {
+            anyhow!(
                 "{bad_message}: message id should be exactly 16 bytes long, error: {reason}",
                 bad_message = super::constants::E_BAD_MESSAGE
-            ),
-        })]),
-    }
+            )
+        })
 }
 
 // CLS\n
@@ -327,12 +310,10 @@ where
     W: AsyncWrite,
 {
     let &[super::constants::CLS] = parts else {
-        return Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
-            error: format!(
-                "{invalid}: RDY command should have exactly one argument",
-                invalid=super::constants::E_INVALID,
-            ),
-        })]);
+        bail!(
+            "{invalid}: CLS command should have exactly zero argument",
+            invalid=super::constants::E_INVALID,
+        )
     };
 
     Ok(vec![Command::ServerCommand(
@@ -357,7 +338,7 @@ where
 
     if let &[command, ..] = parts {
         return match command {
-            super::constants::NOP => Ok(vec![Command::Nop]),
+            super::constants::NOP => Ok(vec![]),
             super::constants::CLS => exec_cls_command(client, parts).await,
             super::constants::IDENTIFY => exec_identify_command(client, parts).await,
             super::constants::SUB => exec_sub_command(client, parts).await,
@@ -371,16 +352,16 @@ where
                     "{address}: Got unknown command: {something_else}",
                     address = client.address
                 );
-                Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {error: format!(
-                    "{invalid}: does this look like a valid protocol command to you: {something_else}?",
-                    invalid=super::constants::E_INVALID,
-                )})])
+                Err(
+                    anyhow!(
+                        "{invalid}: does this look like a valid protocol command to you: {something_else}?",
+                        invalid=super::constants::E_INVALID,
+                    )
+                )
             }
         };
     }
-    Ok(vec![Command::WriterCommand(WriterCommand::RespondErr {
-        error: super::constants::E_INVALID.to_string(),
-    })])
+    Err(anyhow!(E_INVALID))
 }
 
 async fn parse_single_command_and_exec<R, W>(
@@ -392,12 +373,9 @@ where
 {
     let mut current_line_buffer =
         String::with_capacity(super::constants::LINE_BUFFER_PREALLOCATE_SIZE);
+
     if client.reader.read_line(&mut current_line_buffer).await? == 0 {
-        return Ok(vec![Command::ServerCommand(
-            crate::components::server::Message::Disconnect {
-                address: client.address,
-            },
-        )]);
+        bail!(super::constants::E_INVALID)
     }
 
     if current_line_buffer.ends_with('\n') {
@@ -462,22 +440,6 @@ where
 
             }
         }
-        WriterCommand::RespondErr { error } => {
-            match super::writer::write_error_frame(&mut client.writer, error).await {
-                Ok(()) =>
-                    AfterCommand::Disconnect {
-                        message_to_log:
-                            format!("{address}: error occurred in protocol logic, disconnecting...")
-                    },
-                Err(e) =>
-                    AfterCommand::Disconnect {
-                        message_to_log:
-                            format!(
-                                "{address}: error occurred while pushing response bytes to the client, reason: {e}"
-                            )
-                    }
-            }
-        }
     }
 }
 
@@ -509,20 +471,29 @@ pub async fn run_socket_mainloop<R, W>(
                     }
                 }
             }
-            Ok(messages_from_client) = parse_single_command_and_exec(&mut client) => {
-                for command in messages_from_client {
-                    let whats_next = match command {
-                        Command::Nop => AfterCommand::Proceed,
-                        Command::ServerCommand(serve_command) =>
-                            handle_server_command(serve_command, &to_server_sender).await,
-                        Command::WriterCommand(writer_command) =>
-                            handle_writer_command(writer_command, &mut client).await,
-                    };
-                    if let AfterCommand::Disconnect {message_to_log} = whats_next {
-                        log::trace!("{address}: {message_to_log}");
-                        break 'mainloop
+            protocol_raw_result = parse_single_command_and_exec(&mut client) => {
+                match protocol_raw_result {
+                    Err(error_message) => {
+                        if super::writer::write_error_frame(&mut client.writer, error_message.to_string()).await.is_err() {
+                            log::error!("");
+                        }
+
                     }
-                };
+                    Ok(commands) => {
+                        for command in commands {
+                            let whats_next = match command {
+                                Command::ServerCommand(serve_command) =>
+                                    handle_server_command(serve_command, &to_server_sender).await,
+                                Command::WriterCommand(writer_command) =>
+                                    handle_writer_command(writer_command, &mut client).await,
+                            };
+                            if let AfterCommand::Disconnect {message_to_log} = whats_next {
+                                log::trace!("{address}: {message_to_log}");
+                                break 'mainloop
+                            }
+                        };
+                    }
+                }
             }
             else => {
                 log::debug!("{address}: both input and output channels are closed");
