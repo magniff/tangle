@@ -8,6 +8,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWr
 
 use crate::{
     client::{IdentifyData, IdentifyResponse},
+    message::NSQMessage,
     protocol::constants::E_INVALID,
 };
 
@@ -24,6 +25,7 @@ enum Command {
 
 // IDENTIFY\n
 // [ 4-byte size in bytes ][ N-byte JSON data ]
+#[inline]
 async fn exec_identify_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     parts: &[&str],
@@ -72,6 +74,7 @@ where
 }
 
 // SUB <topic_name> <channel_name>\n
+#[inline]
 async fn exec_sub_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     parts: &[&str],
@@ -102,6 +105,7 @@ where
 
 // PUB <topic_name>\n
 // [ 4-byte size in bytes ][ N-byte binary data ]
+#[inline]
 async fn exec_pub_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     parts: &[&str],
@@ -142,6 +146,7 @@ where
 // // [ 4-byte num messages ]
 // // [ 4-byte message #1 size ][ N-byte binary data ]
 // //       ... (repeated <num_messages> times)
+#[inline]
 async fn exec_mpub_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     parts: &[&str],
@@ -199,6 +204,7 @@ where
 
 // RDY <count>\n
 // <count> - a string representation of integer N where 0 < N <= configured_max
+#[inline]
 async fn exec_rdy_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     parts: &[&str],
@@ -231,6 +237,7 @@ where
 
 // // FIN <message_id>\n
 // // <message_id> - message id as 16-byte hex string
+#[inline]
 async fn exec_fin_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     parts: &[&str],
@@ -268,6 +275,7 @@ where
 // <timeout> - a string representation of integer N where N <= configured max timeout
 //     timeout == 0 - requeue a message immediately
 //     timeout  > 0 - defer requeue for timeout milliseconds
+#[inline]
 async fn exec_req_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     parts: &[&str],
@@ -301,6 +309,7 @@ where
 }
 
 // CLS\n
+#[inline]
 async fn exec_cls_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     parts: &[&str],
@@ -323,6 +332,7 @@ where
     )])
 }
 
+#[inline]
 async fn exec_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     parts: &[&str],
@@ -364,6 +374,7 @@ where
     Err(anyhow!(E_INVALID))
 }
 
+#[inline]
 async fn parse_single_command_and_exec<R, W>(
     client: &mut crate::client::Client<R, W>,
 ) -> Result<Vec<Command>>
@@ -451,24 +462,15 @@ pub async fn run_socket_mainloop<R, W>(
     W: AsyncWrite + Unpin + Send + Sync + 'static,
 {
     let (from_server_sender, mut from_server_receiver) =
-        tokio::sync::mpsc::unbounded_channel::<crate::components::client::Message>();
+        tokio::sync::mpsc::unbounded_channel::<NSQMessage>();
     client.send_back_channel = Some(from_server_sender);
 
     let address = client.address.to_string();
     'mainloop: loop {
         tokio::select! {
-            Some(message_from_server) = from_server_receiver.recv() => {
-                match message_from_server {
-                    crate::components::client::Message::PushResponse {message} => {
-                        if super::writer::write_response_frame(&mut client.writer, message).await.is_err() {
-                            break 'mainloop;
-                        }
-                    }
-                    crate::components::client::Message::PushMessage {message} => {
-                        if super::writer::write_message_frame(&mut client.writer, message).await.is_err() {
-                            break 'mainloop;
-                        }
-                    }
+            Some(nsq_message) = from_server_receiver.recv() => {
+                if super::writer::write_message_frame(&mut client.writer, nsq_message).await.is_err() {
+                    break 'mainloop;
                 }
             }
             protocol_raw_result = parse_single_command_and_exec(&mut client) => {
@@ -477,6 +479,7 @@ pub async fn run_socket_mainloop<R, W>(
                         if super::writer::write_error_frame(&mut client.writer, error_message.to_string()).await.is_err() {
                             log::error!("");
                         }
+                        break 'mainloop;
 
                     }
                     Ok(commands) => {

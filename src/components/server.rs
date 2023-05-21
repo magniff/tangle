@@ -6,6 +6,8 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use tokio;
 
+use crate::message::NSQMessage;
+
 // Client2serverMessage is suppose to be a message origin
 #[derive(Debug)]
 pub enum Message {
@@ -25,7 +27,7 @@ pub enum Message {
         address: std::net::SocketAddr,
         topic_name: String,
         channel_name: String,
-        back_to_client: UnboundedSender<super::client::Message>,
+        back_to_client: UnboundedSender<NSQMessage>,
     },
     Finalize {
         address: std::net::SocketAddr,

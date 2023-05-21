@@ -2,6 +2,8 @@ use std::marker::Unpin;
 
 use tokio::io::{AsyncBufRead, AsyncWrite};
 
+use crate::message::NSQMessage;
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default, Clone)]
 pub struct IdentifyData {
     pub client_id: Option<String>,
@@ -67,8 +69,7 @@ pub struct Client<R, W> {
     pub reader: R,
     pub writer: W,
     pub state: ClientState,
-    pub send_back_channel:
-        Option<tokio::sync::mpsc::UnboundedSender<crate::components::client::Message>>,
+    pub send_back_channel: Option<tokio::sync::mpsc::UnboundedSender<NSQMessage>>,
     pub details: Option<ClientDetails>,
 }
 

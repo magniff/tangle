@@ -10,7 +10,6 @@ use tokio::sync::{
     Notify,
 };
 
-use super::client::Message as ClientMessage;
 use crate::message::NSQMessage;
 
 #[derive(Debug)]
@@ -21,7 +20,7 @@ pub enum Message {
     Subscribe {
         address: std::net::SocketAddr,
         channel_name: String,
-        back_to_client: UnboundedSender<super::client::Message>,
+        back_to_client: UnboundedSender<NSQMessage>,
     },
     Publish {
         address: std::net::SocketAddr,
@@ -43,13 +42,13 @@ pub enum Message {
 
 #[derive(Debug)]
 struct ClientDescriptor {
-    queue: UnboundedSender<ClientMessage>,
+    queue: UnboundedSender<NSQMessage>,
     capacity: usize,
 }
 
 #[derive(Debug)]
 enum WorkerNotification {
-    ClientConnected(SocketAddr, UnboundedSender<ClientMessage>),
+    ClientConnected(SocketAddr, UnboundedSender<NSQMessage>),
     ClientDisconnected(SocketAddr),
     SetCapacity(SocketAddr, usize),
     MessageAcked([u8; 16]),
@@ -122,7 +121,7 @@ async fn channel_worker(
                             descriptor.capacity -= 1;
                             // Trying to push the message to the client's io task
                             if descriptor.queue
-                                .send(ClientMessage::PushMessage { message: message.clone() })
+                                .send(message.clone())
                                 .is_err()
                             {
                                 notifications_sender
