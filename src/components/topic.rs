@@ -13,26 +13,17 @@ use tokio::sync::{
 use crate::message::NSQMessage;
 
 #[derive(Debug)]
-pub enum Message {
+pub enum TopicMessage {
     Disconnect {
         address: std::net::SocketAddr,
     },
     Subscribe {
         address: std::net::SocketAddr,
         channel_name: String,
-        back_to_client: UnboundedSender<NSQMessage>,
+        back_to_client: UnboundedSender<crate::client::Message>,
     },
     Publish {
-        address: std::net::SocketAddr,
         message: Arc<Bytes>,
-    },
-    Finalize {
-        address: std::net::SocketAddr,
-        message_id: [u8; 16],
-    },
-    Requeue {
-        address: std::net::SocketAddr,
-        message_id: [u8; 16],
     },
     SetCapacity {
         address: std::net::SocketAddr,
@@ -41,26 +32,46 @@ pub enum Message {
 }
 
 #[derive(Debug)]
-struct ClientDescriptor {
-    queue: UnboundedSender<NSQMessage>,
-    capacity: usize,
+pub enum ChannelMessage {
+    Publish {
+        address: std::net::SocketAddr,
+        message: crate::message::NSQMessage,
+    },
 }
 
 #[derive(Debug)]
-enum WorkerNotification {
-    ClientConnected(SocketAddr, UnboundedSender<NSQMessage>),
-    ClientDisconnected(SocketAddr),
-    SetCapacity(SocketAddr, usize),
-    MessageAcked([u8; 16]),
-    MessageRequeued([u8; 16]),
+pub enum ChannelNotification {
+    ClientConnect {
+        address: std::net::SocketAddr,
+        send_back: UnboundedSender<crate::client::Message>,
+    },
+    ClientDisconnect {
+        address: std::net::SocketAddr,
+    },
+    ClientRdy {
+        address: SocketAddr,
+        value: usize,
+    },
+    MessageAcked {
+        message_id: [u8; 16],
+    },
+    MessageRequeued {
+        message_id: [u8; 16],
+    },
+}
+
+#[derive(Debug)]
+struct ClientDescriptor {
+    queue: UnboundedSender<crate::client::Message>,
+    capacity: usize,
 }
 
 async fn channel_worker(
     channel_name: String,
     messages_receiver: super::pq::PQReceiver<NSQMessage>,
     messages_sender: super::pq::PQSender<NSQMessage>,
-    mut notifications_receiver: UnboundedReceiver<WorkerNotification>,
-    notifications_sender: UnboundedSender<WorkerNotification>,
+    mut notifications_receiver: UnboundedReceiver<ChannelNotification>,
+    notifications_sender: UnboundedSender<ChannelNotification>,
 ) {
     log::trace!("Spinning up a channel worker: {channel_name}");
 
@@ -74,7 +85,7 @@ async fn channel_worker(
         tokio::select! {
             Some(notification) = notifications_receiver.recv() => {
                 match notification {
-                    WorkerNotification::MessageAcked(message_id) => {
+                    ChannelNotification::MessageAcked {message_id} => {
                         pending_messages.remove(&message_id);
                         if let Some(address) = pending_message_to_address.remove(&message_id) {
                             if let Some(descriptor) = clients.get_mut(&address) {
@@ -83,7 +94,7 @@ async fn channel_worker(
                             }
                         }
                     },
-                    WorkerNotification::MessageRequeued(message_id) => {
+                    ChannelNotification::MessageRequeued {message_id} => {
                         // The requeued message may be processed by someone else, so remove the mapping endtry
                         if let Some(client_address) = pending_message_to_address.remove(&message_id) {
                             if let Some(descriptor) = clients.get_mut(&client_address) {
@@ -96,17 +107,17 @@ async fn channel_worker(
                             messages_sender.send(pending_message.clone());
                         }
                     },
-                    WorkerNotification::SetCapacity(address, read_value) => {
-                        if let Some(descriptor) = clients.get_mut(&address) {
-                            descriptor.capacity = read_value;
-                            someone_is_waiting.notify_one();
-                        }
+                    ChannelNotification::ClientConnect {address, send_back} => {
+                        clients.insert(address, ClientDescriptor {queue: send_back, capacity: 0});
                     }
-                    WorkerNotification::ClientDisconnected(address) => {
+                    ChannelNotification::ClientDisconnect {address} => {
                         clients.remove(&address);
                     }
-                    WorkerNotification::ClientConnected(address, queue) => {
-                        clients.insert(address, ClientDescriptor {queue, capacity: 0});
+                    ChannelNotification::ClientRdy {address, value} => {
+                        if let Some(descriptor) = clients.get_mut(&address) {
+                            descriptor.capacity = value;
+                            someone_is_waiting.notify_one();
+                        }
                     }
                 }
             }
@@ -121,11 +132,16 @@ async fn channel_worker(
                             descriptor.capacity -= 1;
                             // Trying to push the message to the client's io task
                             if descriptor.queue
-                                .send(message.clone())
+                                .send(
+                                    crate::client::Message::Send {
+                                        payload: message.clone(),
+                                        notify_back: notifications_sender.clone(),
+                                    }
+                                )
                                 .is_err()
                             {
                                 notifications_sender
-                                    .send(WorkerNotification::ClientDisconnected(address))
+                                    .send(ChannelNotification::ClientDisconnect {address})
                                     .unwrap();
                                 messages_sender.send(message);
                                 break;
@@ -143,43 +159,43 @@ async fn channel_worker(
 
 struct ChannelIO {
     messages: super::pq::PQSender<NSQMessage>,
-    notifications: UnboundedSender<WorkerNotification>,
+    notifications: UnboundedSender<ChannelNotification>,
 }
 
 pub async fn run_topic(
     topic_name: String,
-    mut messages: UnboundedReceiver<Message>,
+    mut messages: UnboundedReceiver<TopicMessage>,
     _config: Arc<crate::settings::TangleArguments>,
 ) -> anyhow::Result<()> {
     log::trace!("Spinning up a topic worker: {topic_name}");
 
     let (buffer_sender, mut buffer_receiver) = unbounded_channel::<Arc<Bytes>>();
     let mut channels_io = HashMap::<String, ChannelIO>::new();
-    let mut mid_to_channel_mapping =
-        HashMap::<[u8; 16], UnboundedSender<WorkerNotification>>::new();
 
     loop {
         tokio::select! {
             Some(message) = buffer_receiver.recv(), if !channels_io.is_empty() => {
                 for io_pair in channels_io.values() {
-                    let nsq_message = NSQMessage::from_body(message.clone());
-                    mid_to_channel_mapping.insert(nsq_message.id, io_pair.notifications.clone());
-                    io_pair.messages.send(nsq_message);
+                    io_pair.messages.send(NSQMessage::from_body(message.clone()));
                 }
             }
             Some(message) = messages.recv() => {
                 match message {
-                    Message::SetCapacity { address, capacity } => {
+                    TopicMessage::SetCapacity {address, capacity} => {
                         for channel_io in channels_io.values() {
-                            channel_io.notifications.send(WorkerNotification::SetCapacity(address, capacity)).unwrap()
+                            channel_io.notifications
+                                .send(ChannelNotification::ClientRdy { address, value: capacity })
+                                .unwrap();
                         }
                     }
-                    Message::Disconnect {address} => {
+                    TopicMessage::Disconnect {address} => {
                         for channel_io in channels_io.values() {
-                            channel_io.notifications.send(WorkerNotification::ClientDisconnected(address)).unwrap()
+                            channel_io
+                                .notifications.send(ChannelNotification::ClientDisconnect {address})
+                                .unwrap()
                         }
                     },
-                    Message::Subscribe {
+                    TopicMessage::Subscribe {
                         address,
                         channel_name,
                         back_to_client,
@@ -187,7 +203,7 @@ pub async fn run_topic(
                         let channel_io_pair = channels_io.entry(channel_name.clone()).or_insert_with(|| {
                             let (message_sender, message_receiver) = super::pq::pq_channel::<NSQMessage>();
                             let (notification_sender, notification_receiver) =
-                                unbounded_channel::<WorkerNotification>();
+                                unbounded_channel::<ChannelNotification>();
                             tokio::spawn(
                                 channel_worker(
                                     channel_name,
@@ -201,20 +217,10 @@ pub async fn run_topic(
                         });
                         channel_io_pair
                             .notifications
-                            .send(WorkerNotification::ClientConnected(address, back_to_client))
+                            .send(ChannelNotification::ClientConnect {address, send_back: back_to_client})
                             .unwrap();
                     }
-                    Message::Finalize { message_id, .. } => {
-                        if let Some(notifications_queue) = mid_to_channel_mapping.remove(&message_id) {
-                            notifications_queue.send(WorkerNotification::MessageAcked(message_id)).unwrap();
-                        }
-                    }
-                    Message::Requeue { message_id, .. } => {
-                        if let Some(notifications_queue) = mid_to_channel_mapping.get(&message_id) {
-                            notifications_queue.send(WorkerNotification::MessageRequeued(message_id)).unwrap();
-                        }
-                    }
-                    Message::Publish {message, .. } => { buffer_sender.send(message).unwrap(); }
+                    TopicMessage::Publish { message } => { buffer_sender.send(message).unwrap(); }
                 }
              }
              else => break
