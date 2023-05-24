@@ -19,6 +19,7 @@ async fn get_topic_queue(
     topic_name: String,
     client_address: std::net::SocketAddr,
 ) -> Result<UnboundedSender<crate::components::topic::TopicMessage>> {
+    log::trace!("{client_address}: get_topic_queue");
     Ok(match mainloop_state.topics.get(&topic_name) {
         Some(topic_queue) => topic_queue.clone(),
         None => {
@@ -43,7 +44,6 @@ async fn get_topic_queue(
 
 // IDENTIFY\n
 // [ 4-byte size in bytes ][ N-byte JSON data ]
-#[inline]
 async fn exec_identify_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
@@ -53,6 +53,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    log::trace!("{address}: IDENTIFY", address = client.address);
     let &[super::constants::IDENTIFY] = parts else {
         bail!(
             "{invalid}: IDENTIFY command can't have any arguments",
@@ -96,7 +97,6 @@ where
 }
 
 // SUB <topic_name> <channel_name>\n
-#[inline]
 async fn exec_sub_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
@@ -106,6 +106,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    log::trace!("{address}: SUB", address = client.address);
     let &[super::constants::SUB, topic_name, channel_name] = parts else {
         bail!(
             "{invalid}: SUB command must have exactly two arguments: topic_name & channel_name",
@@ -127,7 +128,6 @@ where
 
 // PUB <topic_name>\n
 // [ 4-byte size in bytes ][ N-byte binary data ]
-#[inline]
 async fn exec_pub_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
@@ -137,6 +137,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    log::trace!("{address}: PUB", address = client.address);
     let &[super::constants::PUB, topic_name] = parts else {
         bail!(
             "{invalid}: PUB command should have exactly one argument",
@@ -150,6 +151,11 @@ where
     let message_body_size = client.socker_reader.read_u32().await? as usize;
     let mut message_body_buffer = BytesMut::with_capacity(message_body_size);
     unsafe { message_body_buffer.set_len(message_body_size) };
+
+    log::trace!(
+        "{address}: reading the PUB body from the socket",
+        address = client.address
+    );
 
     if client
         .socker_reader
@@ -167,12 +173,11 @@ where
     super::writer::write_response_frame(&mut client.socker_writer, super::constants::OK).await
 }
 
-// // MPUB <topic_name>\n
-// // [ 4-byte body size ]
-// // [ 4-byte num messages ]
-// // [ 4-byte message #1 size ][ N-byte binary data ]
-// //       ... (repeated <num_messages> times)
-#[inline]
+// MPUB <topic_name>\n
+// [ 4-byte body size ]
+// [ 4-byte num messages ]
+// [ 4-byte message #1 size ][ N-byte binary data ]
+//       ... (repeated <num_messages> times)
 async fn exec_mpub_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
@@ -182,15 +187,14 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    log::trace!("{address}: MPUB", address = client.address);
     let &[super::constants::MPUB, topic_name] = parts else {
         bail!(
             "{invalid}: PUB command should have exactly one argument",
             invalid=super::constants::E_INVALID
         )
     };
-
-    let topic_queue =
-        get_topic_queue(mainloop_state, topic_name.to_string(), client.address).await?;
+    log::trace!("{address}: MPUB, {topic_name}", address = client.address);
 
     // There's no actual use for the overall payload size
     let _ = client.socker_reader.read_u32().await?;
@@ -216,7 +220,10 @@ where
         messages.push(Arc::new(current_message_buffer.freeze()));
     }
 
-    for message in messages.into_iter() {
+    let topic_queue =
+        get_topic_queue(mainloop_state, topic_name.to_string(), client.address).await?;
+
+    for message in messages {
         if topic_queue
             .send(crate::components::topic::TopicMessage::Publish { message })
             .is_err()
@@ -230,7 +237,6 @@ where
 
 // RDY <count>\n
 // <count> - a string representation of integer N where 0 < N <= configured_max
-#[inline]
 async fn exec_rdy_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
@@ -240,6 +246,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    log::trace!("{address}: RDY", address = client.address);
     let &[super::constants::RDY, capacity] = parts else {
         bail!(
             "{invalid}: RDY command should have exactly one argument",
@@ -266,9 +273,8 @@ where
 
 // // FIN <message_id>\n
 // // <message_id> - message id as 16-byte hex string
-#[inline]
 async fn exec_fin_command<R, W>(
-    _: &mut crate::client::Client<R, W>,
+    client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
     parts: &[&str],
 ) -> Result<()>
@@ -276,6 +282,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    log::trace!("{address}: FIN", address = client.address);
     let &[super::constants::FIN, message_id] = parts else {
         bail!(
             "{invalid}: FIN command should have exactly one argument",
@@ -303,9 +310,8 @@ where
 // <timeout> - a string representation of integer N where N <= configured max timeout
 //     timeout == 0 - requeue a message immediately
 //     timeout  > 0 - defer requeue for timeout milliseconds
-#[inline]
 async fn exec_req_command<R, W>(
-    _: &mut crate::client::Client<R, W>,
+    client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
     parts: &[&str],
 ) -> Result<()>
@@ -313,6 +319,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    log::trace!("{address}: REQ", address = client.address);
     // For now we'll ommit the requeue timeout
     let &[super::constants::REQ, message_id, _] = parts else {
         bail!(
@@ -337,7 +344,6 @@ where
 }
 
 // CLS\n
-#[inline]
 async fn exec_cls_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
@@ -347,6 +353,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite,
 {
+    log::trace!("{address}: CLS", address = client.address);
     let &[super::constants::CLS] = parts else {
         bail!(
             "{invalid}: CLS command should have exactly zero argument",
@@ -368,13 +375,13 @@ where
         }
     }
 
+    log::info!("Quiting");
     bail!(
         "Client {address} decided to hop off, fine",
         address = client.address
     );
 }
 
-#[inline]
 async fn exec_command<R, W>(
     client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
@@ -419,7 +426,6 @@ where
     Err(anyhow!(E_INVALID))
 }
 
-#[inline]
 async fn parse_single_command_and_exec<R, W>(
     client: &mut crate::client::Client<R, W>,
     mainloop_state: &mut MainloopState,
@@ -493,6 +499,7 @@ pub async fn run_socket_mainloop<R, W>(
             }
             protocol_raw_result = parse_single_command_and_exec(&mut client, &mut mainloop_state) => {
                 if protocol_raw_result.is_err() {
+                    log::error!("{address}: {protocol_raw_result:?}");
                     for topic_queue in mainloop_state.topics.values() {
                         if topic_queue
                             .send(
@@ -504,9 +511,6 @@ pub async fn run_socket_mainloop<R, W>(
                     }
                     break 'mainloop
                 }
-            }
-            else => {
-                break 'mainloop
             }
         };
         if client.socker_writer.flush().await.is_err() {

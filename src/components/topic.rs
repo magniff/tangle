@@ -73,7 +73,7 @@ async fn channel_worker(
     mut notifications_receiver: UnboundedReceiver<ChannelNotification>,
     notifications_sender: UnboundedSender<ChannelNotification>,
 ) {
-    log::trace!("Spinning up a channel worker: {channel_name}");
+    log::info!("Spinning up a channel worker: {channel_name}");
 
     let mut rng = rand::rngs::StdRng::from_entropy();
     let mut clients = HashMap::<SocketAddr, ClientDescriptor>::with_capacity(256);
@@ -167,7 +167,7 @@ pub async fn run_topic(
     mut messages: UnboundedReceiver<TopicMessage>,
     _config: Arc<crate::settings::TangleArguments>,
 ) -> anyhow::Result<()> {
-    log::trace!("Spinning up a topic worker: {topic_name}");
+    log::info!("Spinning up a topic worker: {topic_name}");
 
     let (buffer_sender, mut buffer_receiver) = unbounded_channel::<Arc<Bytes>>();
     let mut channels_io = HashMap::<String, ChannelIO>::new();
