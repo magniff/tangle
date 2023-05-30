@@ -1,6 +1,7 @@
 use std::marker::Unpin;
 
 use tokio::io::{AsyncBufRead, AsyncWrite};
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default, Clone)]
 pub struct IdentifyData {
@@ -54,22 +55,11 @@ impl Default for IdentifyResponse {
 #[derive(Default)]
 pub struct ClientDetails {}
 
-#[derive(PartialEq, Eq)]
-pub enum ClientState {
-    UnInitialized,
-    Connected,
-    Subscribed,
-    Closing,
-}
-
 pub struct Client<R, W> {
-    pub address: std::net::SocketAddr,
-    pub reader: R,
-    pub writer: W,
-    pub state: ClientState,
-    pub send_back_channel:
-        Option<tokio::sync::mpsc::UnboundedSender<crate::components::client::Message>>,
     pub details: Option<ClientDetails>,
+    pub address: std::net::SocketAddr,
+    pub socker_reader: R,
+    pub socker_writer: W,
 }
 
 impl<R, W> Client<R, W> {
@@ -80,11 +70,16 @@ impl<R, W> Client<R, W> {
     {
         Self {
             address,
-            reader,
-            writer,
+            socker_reader: reader,
+            socker_writer: writer,
             details: None,
-            state: ClientState::UnInitialized,
-            send_back_channel: None,
         }
     }
+}
+
+pub enum Message {
+    Send {
+        payload: crate::message::NSQMessage,
+        notify_back: UnboundedSender<crate::components::topic::ChannelNotification>,
+    },
 }

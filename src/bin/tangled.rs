@@ -1,5 +1,6 @@
-use clap::Parser;
 use std::sync::Arc;
+
+use clap::Parser;
 
 fn main() -> anyhow::Result<()> {
     let arguments = Arc::new(tangle::settings::TangleArguments::parse());
@@ -17,7 +18,8 @@ fn main() -> anyhow::Result<()> {
         .build()
         .unwrap();
 
-    runtime.block_on(async move {
-        tangle::server::run_tangled(arguments.clone(), tokio::signal::ctrl_c()).await
-    })
+    runtime.block_on(tangle::server::run_tangled(
+        arguments,
+        tokio::signal::ctrl_c(),
+    ))
 }
