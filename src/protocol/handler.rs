@@ -86,11 +86,11 @@ where
                 data: identify_data,
             })?;
 
-        super::writer::write_response_frame(
+        return super::writer::write_response_frame(
             &mut client.socker_writer,
             serde_json::to_string(&IdentifyResponse::default()).unwrap(),
         )
-        .await?;
+        .await;
     }
 
     super::writer::write_response_frame(&mut client.socker_writer, super::constants::OK).await
@@ -375,7 +375,6 @@ where
         }
     }
 
-    log::info!("Quiting");
     bail!(
         "Client {address} decided to hop off, fine",
         address = client.address

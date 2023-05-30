@@ -191,7 +191,8 @@ pub async fn run_topic(
                     TopicMessage::Disconnect {address} => {
                         for channel_io in channels_io.values() {
                             channel_io
-                                .notifications.send(ChannelNotification::ClientDisconnect {address})
+                                .notifications
+                                .send(ChannelNotification::ClientDisconnect {address})
                                 .unwrap()
                         }
                     },
