@@ -6,8 +6,8 @@ pub struct TangleArguments {
     #[clap(env, long, default_value = "debug")]
     pub log_level: simplelog::LevelFilter,
 
-    #[clap(env, long, default_value = "8", help = "Max worker threads count")]
-    pub worker_threads: u8,
+    #[clap(env, long, help = "Max worker threads count")]
+    pub worker_threads: Option<usize>,
 
     #[clap(env, long, default_value = "2048", help = "Max in-flight messages")]
     pub max_in_flight: u32,
