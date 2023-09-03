@@ -23,7 +23,7 @@ pub enum TopicMessage {
         back_to_client: UnboundedSender<crate::client::Message>,
     },
     Publish {
-        message: Arc<Bytes>,
+        message: Bytes,
     },
     SetCapacity {
         address: std::net::SocketAddr,
@@ -169,7 +169,7 @@ pub async fn run_topic(
 ) -> anyhow::Result<()> {
     log::info!("Spinning up a topic worker: {topic_name}");
 
-    let (buffer_sender, mut buffer_receiver) = unbounded_channel::<Arc<Bytes>>();
+    let (buffer_sender, mut buffer_receiver) = unbounded_channel::<Bytes>();
     let mut channels_io = HashMap::<String, ChannelIO>::new();
 
     loop {

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
 use bytes::BytesMut;
@@ -57,7 +56,7 @@ where
     let &[super::constants::IDENTIFY] = parts else {
         bail!(
             "{invalid}: IDENTIFY command can't have any arguments",
-            invalid=super::constants::E_INVALID
+            invalid = super::constants::E_INVALID
         )
     };
 
@@ -110,7 +109,7 @@ where
     let &[super::constants::SUB, topic_name, channel_name] = parts else {
         bail!(
             "{invalid}: SUB command must have exactly two arguments: topic_name & channel_name",
-            invalid=super::constants::E_INVALID
+            invalid = super::constants::E_INVALID
         )
     };
 
@@ -141,7 +140,7 @@ where
     let &[super::constants::PUB, topic_name] = parts else {
         bail!(
             "{invalid}: PUB command should have exactly one argument",
-            invalid=super::constants::E_INVALID
+            invalid = super::constants::E_INVALID
         )
     };
 
@@ -167,7 +166,7 @@ where
     }
 
     topic_queue.send(crate::components::topic::TopicMessage::Publish {
-        message: Arc::new(message_body_buffer.freeze()),
+        message: message_body_buffer.freeze(),
     })?;
 
     super::writer::write_response_frame(&mut client.socker_writer, super::constants::OK).await
@@ -191,7 +190,7 @@ where
     let &[super::constants::MPUB, topic_name] = parts else {
         bail!(
             "{invalid}: PUB command should have exactly one argument",
-            invalid=super::constants::E_INVALID
+            invalid = super::constants::E_INVALID
         )
     };
     log::trace!("{address}: MPUB, {topic_name}", address = client.address);
@@ -217,7 +216,7 @@ where
         {
             bail!(super::constants::E_BAD_BODY)
         }
-        messages.push(Arc::new(current_message_buffer.freeze()));
+        messages.push(current_message_buffer.freeze());
     }
 
     let topic_queue =
@@ -250,14 +249,14 @@ where
     let &[super::constants::RDY, capacity] = parts else {
         bail!(
             "{invalid}: RDY command should have exactly one argument",
-            invalid=super::constants::E_INVALID
+            invalid = super::constants::E_INVALID
         )
     };
 
     let Ok(capacity) = capacity.parse::<usize>() else {
         bail!(
             "{invalid}: RDY command should have a numeric count argument",
-            invalid=super::constants::E_INVALID
+            invalid = super::constants::E_INVALID
         )
     };
 
@@ -286,7 +285,7 @@ where
     let &[super::constants::FIN, message_id] = parts else {
         bail!(
             "{invalid}: FIN command should have exactly one argument",
-            invalid=super::constants::E_INVALID
+            invalid = super::constants::E_INVALID
         )
     };
 
@@ -324,7 +323,7 @@ where
     let &[super::constants::REQ, message_id, _] = parts else {
         bail!(
             "{invalid}: REQ command should have exactly two arguments",
-            invalid=super::constants::E_INVALID
+            invalid = super::constants::E_INVALID
         );
     };
 
@@ -357,7 +356,7 @@ where
     let &[super::constants::CLS] = parts else {
         bail!(
             "{invalid}: CLS command should have exactly zero argument",
-            invalid=super::constants::E_INVALID,
+            invalid = super::constants::E_INVALID,
         )
     };
 

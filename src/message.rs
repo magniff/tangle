@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use rand::{distributions::Alphanumeric, Rng};
@@ -11,11 +8,11 @@ pub struct NSQMessage {
     pub id: [u8; 16],
     pub timestamp: u64,
     pub attempts: u16,
-    pub body: Arc<Bytes>,
+    pub body: Bytes,
 }
 
 impl NSQMessage {
-    pub fn from_body(body: Arc<Bytes>) -> Self {
+    pub fn from_body(body: Bytes) -> Self {
         Self {
             id: rand::thread_rng()
                 .sample_iter(&Alphanumeric)
